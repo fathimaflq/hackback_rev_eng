@@ -1,0 +1,22 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Killer tests</title><link rel="stylesheet" href="style.css"></head><body>
+<header><div class="brand"><i></i>EduLab <span style="color:var(--mu)">/ Scheduler</span></div>
+<nav><a href="/">Book</a><a class="on" href="demo.html">Killer tests</a></nav><div></div></header>
+<main><p class="acc">Developer panel</p><h1>Killer tests</h1>
+<p class="sub">Each button calls the real backend and PostgreSQL (sandbox faculty <code>fac_test</code>, cleared before every run).</p>
+<div class="t3">
+<div class="card"><h3>Test 1 · Timezone correctness</h3><p class="hint">Host Asia/Kolkata · Booker America/Los_Angeles<br>11:00 AM IST → 10:30 PM PDT (previous day), 05:30 UTC</p><button class="btn sm" data-t="timezone">Run timezone test</button><div class="res" id="timezone"></div></div>
+<div class="card"><h3>Test 2 · Buffer enforcement</h3><p class="hint">Existing booking 10:00–10:30, buffer 15 min<br>10:30 and 10:40 blocked, 10:45 available</p><button class="btn sm" data-t="buffer">Run buffer test</button><div class="res" id="buffer"></div></div>
+<div class="card"><h3>Test 3 · Concurrent booking</h3><p class="hint">Student A and Student B, same faculty, same slot (11:00 IST), sent at the same time</p><button class="btn sm" data-t="concurrent">Run concurrent booking test</button><div class="res" id="concurrent"></div></div>
+</div></main>
+<script>
+const msg={
+ timezone:r=>`UTC stored: ${r.slot&&r.slot.startTime}\nHost:   ${r.slot&&r.slot.host.start12} ${r.slot&&r.slot.host.zone}\nBooker: ${r.slot&&r.slot.booker.start12} ${r.slot&&r.slot.booker.zone} · ${r.slot&&r.slot.booker.date}\nChecks: ${JSON.stringify(r.checks)}`,
+ buffer:r=>`Existing 10:00–10:30 → ${r.seedStatus}\n`+r.probes.map(p=>`${p.time} → engine ${p.engine==='available'?'AVAILABLE':'BLOCKED ('+p.engine+')'} · POST ${p.httpStatus}`).join('\n'),
+ concurrent:r=>`Student A → ${r.studentA} ${r.studentA===201?'Created':'Conflict'}\nStudent B → ${r.studentB} ${r.studentB===201?'Created':'Conflict'}\nDatabase: ${r.confirmedBookings} confirmed booking(s)\n${r.pass?'No double booking':'DOUBLE BOOKING'}`};
+document.addEventListener('click',async e=>{const t=e.target.dataset.t;if(!t)return;
+ const o=document.getElementById(t);o.textContent='Running…';
+ try{const r=await fetch('/api/demo/'+t,{method:'POST'}).then(x=>x.json());
+  o.innerHTML=`<span class="badge ${r.pass?'ok':'bad'}">${r.pass?'✓ PASS':'✕ FAIL'}</span>\n`+msg[t](r)}
+ catch(x){o.innerHTML='<span class="badge bad">✕ FAIL</span>\n'+x.message}});
+</script></body></html>

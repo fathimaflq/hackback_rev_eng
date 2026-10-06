@@ -1,0 +1,1797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Slot Booking · Faculty Office Hours</title>
+<meta name="description" content="Book faculty office hours and lab sessions without scheduling conflicts. Real-time availability with timezone-aware slot management.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="site-header">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <span class="brand-name">Smart Slot Booking</span>
+  </div>
+  <nav class="nav-bar" aria-label="Main Navigation">
+    <button class="nav-tab active" id="tab-book" data-tab="book">
+      <span>📅</span>
+      <span>Slot Booking</span>
+    </button>
+    <button class="nav-tab" id="tab-ai" data-tab="ai">
+      <span>✨</span>
+      <span>AI Assistant</span>
+      <span class="nav-tab-pill">Natural</span>
+    </button>
+    <button class="nav-tab" id="tab-my" data-tab="my">
+      <span>📋</span>
+      <span>My Bookings</span>
+      <span class="nav-tab-pill" id="badge-my-count" style="display:none; background:var(--card2); color:var(--ac); border:1px solid rgba(255,183,3,.3);">0</span>
+    </button>
+    <button class="nav-tab" id="tab-lab" data-tab="lab">
+      <span>⚡</span>
+      <span>Concurrency & Queue Lab</span>
+      <span class="nav-tab-pill">Live Test</span>
+    </button>
+  </nav>
+  <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+    <div class="user-control" id="user-control">
+      <button class="user-btn" id="user-btn" aria-haspopup="true" aria-expanded="false" title="Switch User Account">
+        <span class="user-avatar-tiny" id="user-avatar-tag">SA</span>
+        <span id="user-name-display">Student A</span>
+        <span style="font-size:10px; color:var(--tx2);">▾</span>
+      </button>
+      <div class="user-dropdown" id="user-dropdown">
+        <div class="user-dropdown-header">Switch Student Account</div>
+        <div id="user-dropdown-list"></div>
+      </div>
+    </div>
+    <div class="tz-control">
+      <span class="tz-label">Your timezone</span>
+      <select id="btz" aria-label="Select your timezone"></select>
+    </div>
+  </div>
+</header>
+
+<main id="app">
+  <!-- View 1: Standard Slot Booking -->
+  <div id="view-book" class="view-panel active">
+    <div class="hero">
+      <p class="hero-eyebrow">Real-time availability</p>
+      <h1 class="hero-title">Book faculty office hours<br>and lab sessions.</h1>
+      <p class="hero-sub">Scheduling conflicts prevented. Times shown in your local timezone.</p>
+    </div>
+    <div id="root"></div>
+  </div>
+
+  <!-- View 2: Natural-Language AI Assistant -->
+  <div id="view-ai" class="view-panel">
+    <div class="hero">
+      <p class="hero-eyebrow">Correctness-Guaranteed AI</p>
+      <h1 class="hero-title">Natural-Language Booking</h1>
+      <p class="hero-sub">Ask in plain English — the AI parses your request into structured filters, and the real slot engine finds all free options.</p>
+    </div>
+
+    <section class="nlp-container" id="nlp-container" aria-label="AI Natural Language Booking Assistant">
+      <div class="nlp-header">
+        <div class="nlp-title-wrap">
+          <span class="nlp-sparkle">✨</span>
+          <span class="nlp-title">AI Assistant Prompt</span>
+          <span class="nlp-badge">Zero Hallucinations</span>
+        </div>
+        <div class="nlp-safety-tag">AI only extracts criteria · Real slot engine enforces buffers & working hours</div>
+      </div>
+      <form class="nlp-form" id="nlp-form" onsubmit="event.preventDefault(); handleNlpSearch();">
+        <div class="nlp-input-wrap">
+          <input
+            type="text"
+            id="nlp-input"
+            class="nlp-input"
+            placeholder="Try: 'I need 30 mins with Prof. Rao sometime Thursday afternoon'..."
+            aria-label="Natural language booking query"
+          />
+        </div>
+        <button type="submit" class="nlp-submit" id="nlp-submit">
+          <span>Find Options</span>
+          <span class="nlp-sparkle">✨</span>
+        </button>
+      </form>
+      <div class="nlp-chips">
+        <span class="nlp-chips-label">Try asking:</span>
+        <button type="button" class="nlp-chip" data-q="I need 30 mins with Prof. Rao sometime Thursday afternoon">⚡ 30m with Prof. Rao Thursday afternoon</button>
+        <button type="button" class="nlp-chip" data-q="I need 30 mins with Prof. Rao Friday afternoon">⚡ 30m with Prof. Rao Friday afternoon</button>
+        <button type="button" class="nlp-chip" data-q="45 mins with Dr. Sharma next Monday morning">⚡ 45m with Dr. Sharma Monday morning</button>
+        <button type="button" class="nlp-chip" data-q="Quick 15 min chat with Prof. Rao tomorrow">⚡ Quick 15m with Prof. Rao tomorrow</button>
+      </div>
+      <div id="nlp-result-container"></div>
+    </section>
+
+    <!-- AI Options Grid Container -->
+    <div id="ai-options-container"></div>
+  </div>
+
+  <!-- View 3: My Bookings & Active Reservations -->
+  <div id="view-my" class="view-panel">
+    <div class="hero">
+      <p class="hero-eyebrow">Active Reservations & Queue</p>
+      <h1 class="hero-title">My Bookings & Waiting Queue</h1>
+      <p class="hero-sub">View confirmed bookings, manage your waiting queue positions, or release slots for other students.</p>
+    </div>
+    <div class="my-bookings-container" id="my-bookings-container">
+      <div id="my-bookings-list"></div>
+    </div>
+  </div>
+
+  <!-- View 4: Concurrency & Queue Live Lab -->
+  <div id="view-lab" class="view-panel">
+    <div class="hero">
+      <p class="hero-eyebrow">Live Interactive Verification</p>
+      <h1 class="hero-title">Concurrency & Queue Live Lab</h1>
+      <p class="hero-sub">Test two students booking at the exact same millisecond, join the waiting queue (WL1), and watch WL1 get auto-promoted when a slot is released.</p>
+    </div>
+    <div id="lab-container-root"></div>
+  </div>
+  <div id="site-toast"></div>
+</main>
+
+<script>
+// ─── Config & User State ──────────────────────────────────────────────────────
+const DUR = 30;
+let ME = localStorage.getItem('ssb_current_user') || 'student_A';
+let currentUserObj = null;
+let usersList = [];
+const TIMEZONES = [
+  'Asia/Kolkata',
+  'America/Los_Angeles',
+  'America/New_York',
+  'Europe/London',
+  'Australia/Sydney'
+];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let tz = detectTz();
+let facultyList = [];
+let selFaculty = null;
+let selDate = null;
+let selSlot = null;
+let conf = null;
+let errMsg = '';
+let loading = false;
+let slotsData = {}; // keyed by date ISO string
+let nlpResult = null;
+let aiMatchingSlotTimes = new Set();
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function detectTz() {
+  const browser = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return TIMEZONES.includes(browser) ? browser : 'Asia/Kolkata';
+}
+
+function upcomingWeekdays(n) {
+  const days = [];
+  const now = new Date();
+  let d = new Date(now);
+  d.setHours(0,0,0,0);
+  while (days.length < n) {
+    const dow = d.getDay(); // 0=Sun,6=Sat
+    if (dow !== 0 && dow !== 6) {
+      days.push(new Date(d));
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
+}
+
+function isoDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function fmtDay(d) {
+  return d.toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+function fmtDayNum(d) {
+  return d.getDate();
+}
+
+function fmtMonthYear(d) {
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+async function api(path, opts = {}) {
+  const r = await fetch('/api' + path, {
+    ...opts,
+    headers: { 'content-type': 'application/json', 'x-user-id': ME, ...(opts.headers || {}) }
+  });
+  return { status: r.status, body: await r.json() };
+}
+
+function qs(o) { return new URLSearchParams(o).toString(); }
+
+function showToast(msg, icon = '✨') {
+  const toast = $('#site-toast');
+  if (!toast) return;
+  toast.innerHTML = `<span style="font-size:16px;">${icon}</span> <span>${escapeHtml(msg)}</span>`;
+  toast.classList.add('show');
+  clearTimeout(window._toastTimeout);
+  window._toastTimeout = setTimeout(() => toast.classList.remove('show'), 3500);
+}
+
+// ─── User Switcher / Sign-In ──────────────────────────────────────────────────
+async function initUsers() {
+  try {
+    const res = await api('/users');
+    usersList = (res.body?.users || []).filter(u => u.role === 'STUDENT');
+  } catch (e) {
+    usersList = [];
+  }
+  if (!usersList.length) {
+    usersList = [
+      { id: 'student_A', name: 'Student A', role: 'STUDENT', timezone: 'America/Los_Angeles' },
+      { id: 'student_B', name: 'Student B', role: 'STUDENT', timezone: 'America/Los_Angeles' },
+      { id: 'stu_you', name: 'You (demo student)', role: 'STUDENT', timezone: 'America/Los_Angeles' },
+      { id: 'stu_seed', name: 'Seed Student', role: 'STUDENT', timezone: 'Asia/Kolkata' }
+    ];
+  }
+  currentUserObj = usersList.find(u => u.id === ME) || usersList[0];
+  ME = currentUserObj.id;
+  updateUserDisplay();
+  renderUserDropdown();
+  bindUserDropdown();
+}
+
+function updateUserDisplay() {
+  const nameEl = $('#user-name-display');
+  const avatarEl = $('#user-avatar-tag');
+  if (nameEl && currentUserObj) {
+    nameEl.textContent = currentUserObj.name;
+    const inits = currentUserObj.name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+    if (avatarEl) avatarEl.textContent = inits;
+  }
+}
+
+function renderUserDropdown() {
+  const listEl = $('#user-dropdown-list');
+  if (!listEl) return;
+  listEl.innerHTML = usersList.map(u => {
+    const isActive = u.id === ME;
+    return `
+      <button class="user-opt-btn ${isActive ? 'active' : ''}" data-uid="${u.id}">
+        <div class="user-opt-name">
+          <span>${u.name}</span>
+          <span class="user-opt-id">${u.id} · ${u.timezone}</span>
+        </div>
+        ${isActive ? '<span>✓</span>' : ''}
+      </button>
+    `;
+  }).join('');
+}
+
+function bindUserDropdown() {
+  const btn = $('#user-btn');
+  const dd = $('#user-dropdown');
+  if (!btn || !dd) return;
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    dd.classList.toggle('open');
+  };
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#user-control')) {
+      dd.classList.remove('open');
+    }
+  });
+
+  dd.onclick = async (e) => {
+    const opt = e.target.closest('[data-uid]');
+    if (!opt) return;
+    const uid = opt.dataset.uid;
+    if (uid === ME) {
+      dd.classList.remove('open');
+      return;
+    }
+    await switchUser(uid);
+    dd.classList.remove('open');
+  };
+}
+
+async function switchUser(userId) {
+  const target = usersList.find(u => u.id === userId);
+  if (!target) return;
+  ME = target.id;
+  currentUserObj = target;
+  localStorage.setItem('ssb_current_user', ME);
+  updateUserDisplay();
+  renderUserDropdown();
+  showToast(`Switched account to ${target.name} (${target.id})`, '👤');
+
+  // Invalidate slot cache & reload views with new identity
+  slotsData = {};
+  conf = null;
+  selSlot = null;
+
+  await render();
+  if ($('#view-my')?.classList.contains('active')) {
+    await renderMyBookings();
+  }
+  updateBadgeCounts();
+}
+
+async function updateBadgeCounts() {
+  try {
+    const [resBk, resWl] = await Promise.all([
+      api('/bookings/history'),
+      api('/waitlist/my')
+    ]);
+    const bks = (resBk.body?.bookings || []).filter(b => b.status === 'CONFIRMED');
+    const wls = (resWl.body?.waitlist || []).filter(w => w.status === 'WAITING');
+    const total = bks.length + wls.length;
+    const badge = $('#badge-my-count');
+    if (badge) {
+      if (total > 0) {
+        badge.textContent = `${bks.length} booked · ${wls.length} WL`;
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  } catch (e) {}
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+async function init() {
+  populateTzSelect();
+  await initUsers();
+  const res = await api('/faculty');
+  facultyList = res.body.faculty || [];
+  if (facultyList.length) selFaculty = facultyList[0];
+  await render();
+  updateBadgeCounts();
+}
+
+function populateTzSelect() {
+  const sel = $('#btz');
+  sel.innerHTML = '';
+  TIMEZONES.forEach(z => sel.add(new Option(z, z)));
+  sel.value = tz;
+  sel.onchange = async e => {
+    tz = e.target.value;
+    slotsData = {};
+    conf = null;
+    selSlot = null;
+    await render();
+    // If there is an active search or AI view is open, refresh AI options in the new timezone!
+    const q = ($('#nlp-input')?.value || '').trim();
+    if (q) {
+      await handleNlpSearch(q);
+    }
+  };
+}
+
+// ─── Main render ──────────────────────────────────────────────────────────────
+async function render() {
+  const root = $('#root');
+  if (!root) return;
+
+  // Step 1: Faculty selection
+  if (!selFaculty) { root.innerHTML = renderFacultyPicker(); bindFacultyPicker(); return; }
+
+  const DAYS = upcomingWeekdays(10);
+  if (selDate && !DAYS.some(d => isoDate(d) === selDate)) {
+    const customD = new Date(selDate + 'T00:00:00');
+    DAYS.push(customD);
+    DAYS.sort((a, b) => a - b);
+  }
+  if (!selDate) selDate = isoDate(DAYS[0]);
+
+  // Load slots for all visible days if not cached
+  await loadSlots(DAYS, selFaculty.id);
+
+  const dayData = slotsData[selDate] || {};
+  const slots = dayData.slots || [];
+  const isDayOff = dayData.dayOff || false;
+  const dayOffReason = dayData.reason || 'Faculty unavailable';
+
+  root.innerHTML = `
+    <div class="layout">
+      <div class="layout-left">
+        ${renderFacultyBadge()}
+        ${renderCalendar(DAYS)}
+        ${renderSlotGrid(slots, isDayOff, dayOffReason)}
+      </div>
+      <div class="layout-right">
+        ${conf ? renderConfirmation() : renderBookingPanel(slots, isDayOff)}
+      </div>
+    </div>
+  `;
+
+  bindEvents();
+}
+
+// ─── Slot loading ─────────────────────────────────────────────────────────────
+async function loadSlots(days, facultyId) {
+  const missing = days.filter(d => !slotsData[isoDate(d)]);
+  if (!missing.length) return;
+  await Promise.all(missing.map(async d => {
+    const iso = isoDate(d);
+    const res = await api('/slots?' + qs({ facultyId, date: iso, duration: DUR, bookerTz: tz }));
+    slotsData[iso] = res.body;
+  }));
+}
+
+// ─── Faculty picker ───────────────────────────────────────────────────────────
+function renderFacultyPicker() {
+  return `
+    <div class="faculty-grid">
+      ${facultyList.map(f => `
+        <button class="faculty-card" data-fac="${f.id}" id="fac-btn-${f.id}">
+          <div class="fac-avatar">${f.name.split(' ').map(w=>w[0]).slice(0,2).join('')}</div>
+          <div class="fac-info">
+            <strong>${f.name}</strong>
+            <span>${f.department}</span>
+            <span class="fac-loc">${f.location}</span>
+          </div>
+          <span class="fac-tz-badge">${f.timezone || ''}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function bindFacultyPicker() {
+  $$('[data-fac]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selFaculty = facultyList.find(f => f.id === btn.dataset.fac);
+      selDate = null; selSlot = null; conf = null; slotsData = {};
+      render();
+    });
+  });
+}
+
+// ─── Faculty badge ────────────────────────────────────────────────────────────
+function renderFacultyBadge() {
+  const f = selFaculty;
+  return `
+    <div class="fac-badge">
+      <div class="fac-avatar sm">${f.name.split(' ').map(w=>w[0]).slice(0,2).join('')}</div>
+      <div class="fac-badge-info">
+        <strong>${f.name}</strong>
+        <span>${f.department} · ${f.location}</span>
+      </div>
+      <button class="ghost-sm" id="btn-change-fac" aria-label="Change faculty">Change</button>
+    </div>
+  `;
+}
+
+// ─── Calendar ─────────────────────────────────────────────────────────────────
+function renderCalendar(days) {
+  const months = [...new Set(days.map(d => fmtMonthYear(d)))];
+  return `
+    <div class="cal-section">
+      <div class="cal-header">
+        <span class="cal-month">${months.join(' · ')}</span>
+        <span class="cal-legend"><span class="dot available"></span>Available <span class="dot dayoff"></span>Day off</span>
+      </div>
+      <div class="cal-days" role="listbox" aria-label="Select date">
+        ${days.map(d => {
+          const iso = isoDate(d);
+          const data = slotsData[iso] || {};
+          const isDayOff = data.dayOff;
+          const count = (data.availableSlots || []).length;
+          const isSelected = iso === selDate;
+          return `<button
+            class="cal-day ${isSelected ? 'selected' : ''} ${isDayOff ? 'dayoff' : count === 0 && data.slots ? 'full' : ''}"
+            data-d="${iso}"
+            aria-label="${fmtDay(d)} ${fmtDayNum(d)}, ${count} slots available"
+            role="option"
+            aria-selected="${isSelected}">
+            <span class="cal-dow">${fmtDay(d)}</span>
+            <span class="cal-num">${fmtDayNum(d)}</span>
+            <span class="cal-count">${isDayOff ? 'Off' : count > 0 ? count : data.slots ? '—' : '…'}</span>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ─── Slot grid ────────────────────────────────────────────────────────────────
+function renderSlotGrid(slots, isDayOff, dayOffReason) {
+  if (isDayOff) {
+    return `
+      <div class="dayoff-banner">
+        <div class="dayoff-icon">🚫</div>
+        <div>
+          <strong>Faculty unavailable</strong>
+          <p>${dayOffReason}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  if (!slots || !slots.length) {
+    return `<div class="empty-slots"><span>No slots available for this day.</span></div>`;
+  }
+
+  const morning = slots.filter(s => parseInt(s.host.start) < 12);
+  const afternoon = slots.filter(s => parseInt(s.host.start) >= 12);
+
+  const renderGroup = (label, group) => group.length ? `
+    <div class="slot-group-label">${label}</div>
+    <div class="slot-grid">
+      ${group.map(s => {
+        const isSelected = s.startTime === selSlot;
+        const isAiMatch = aiMatchingSlotTimes.has(s.startTime);
+        const isMy = s.isMyBooking;
+        const inQueue = !!s.myWaitlist;
+        const isBooked = s.status === 'booked';
+        const isBuffer = s.status === 'buffer';
+
+        let extraClass = '';
+        if (isMy) extraClass += ' my-booking';
+        else if (inQueue) extraClass += ' in-queue';
+
+        return `<button
+          class="slot-btn ${s.status} ${isSelected ? 'selected' : ''} ${isAiMatch ? 'ai-match' : ''} ${extraClass}"
+          data-s="${s.startTime}"
+          ${isBuffer ? 'disabled' : ''}
+          aria-label="${s.host.start12} to ${s.host.end12} ${s.host.zone}, ${s.status}">
+          ${isAiMatch ? `<div class="slot-ai-badge">✨ AI Match</div>` : ''}
+          <div class="slot-host-time">${s.host.start12}<span class="slot-dash">–</span>${s.host.end12} <em>${s.host.zone}</em></div>
+          <div class="slot-booker-time">${s.booker.start12}–${s.booker.end12} ${s.booker.zone}</div>
+          ${isMy ? `<div class="slot-badge-my">✓ Booked by You</div>` :
+            inQueue ? `<div class="slot-badge-queue">★ In Queue (${s.myWaitlist.queueCode})</div>` :
+            isBooked ? `<div class="slot-status-label">Booked · ${s.waitlistCount > 0 ? s.waitlistCount + ' in queue' : 'Queue open'}</div>` :
+            isBuffer ? `<div class="slot-status-label">15m Buffer</div>` : ''}
+          ${isSelected ? `<div class="slot-selected-mark">✓ Selected</div>` : ''}
+        </button>`;
+      }).join('')}
+    </div>
+  ` : '';
+
+  return `
+    <div class="slots-section">
+      <div class="slots-header">
+        <span class="slots-title">Available slots <span class="slots-tz-note">· Faculty time (${slots[0]?.host?.zone || 'IST'})</span></span>
+        <span class="slots-duration">${DUR} min sessions · ${selFaculty?.name?.split(' ')[0] || ''} is in ${selFaculty?.timezone || 'IST'}</span>
+      </div>
+      ${renderGroup('Morning', morning)}
+      ${renderGroup('Afternoon', afternoon)}
+    </div>
+  `;
+}
+
+// ─── Booking panel ────────────────────────────────────────────────────────────
+function renderBookingPanel(slots, isDayOff) {
+  const f = selFaculty;
+  const s = selSlot ? slots.find(x => x.startTime === selSlot) : null;
+  if (selSlot && !s) selSlot = null;
+
+  return `
+    <div class="panel-card ${s ? 'panel-ready' : ''}">
+      <div class="panel-fac-info">
+        <div class="panel-row"><span>Faculty</span><span>${f.name}</span></div>
+        <div class="panel-row"><span>Department</span><span>${f.department}</span></div>
+        <div class="panel-row"><span>Location</span><span>${f.location}</span></div>
+        <div class="panel-row"><span>Faculty timezone</span><span>${f.timezone}</span></div>
+        <div class="panel-row"><span>Your timezone</span><span>${tz}</span></div>
+        <div class="panel-row"><span>Duration</span><span>${DUR} minutes</span></div>
+      </div>
+
+      ${s ? `
+        <div class="panel-selected">
+          <div class="panel-selected-header">${s.isMyBooking ? '✓ Your Active Reservation' : s.myWaitlist ? '★ Waiting Queue Spot' : s.status === 'booked' ? '● Slot Booked (Queue Open)' : 'Selected Slot'}</div>
+          <div class="time-block faculty-time">
+            <div class="time-label">Faculty time</div>
+            <div class="time-value">${s.host.start12} – ${s.host.end12} <span class="tz-tag">${s.host.zone}</span></div>
+            <div class="time-date">${s.host.date}</div>
+          </div>
+          <div class="time-block your-time">
+            <div class="time-label">Your local time</div>
+            <div class="time-value">${s.booker.start12} – ${s.booker.end12} <span class="tz-tag">${s.booker.zone}</span></div>
+            <div class="time-date">${s.booker.date}</div>
+          </div>
+          <div class="time-block utc-time">
+            <div class="time-label">UTC</div>
+            <div class="time-value">${s.utc.start} – ${s.utc.end} <span class="tz-tag">UTC</span></div>
+          </div>
+
+          ${s.status === 'available' ? `
+            <button class="btn-confirm" id="btn-confirm">Confirm booking</button>
+          ` : s.isMyBooking ? `
+            <div class="queue-info-box" style="border-color:rgba(62,207,142,.3); background:rgba(62,207,142,.05);">
+              <strong style="color:var(--ok);">You have booked this slot</strong>
+              <p>Booking ID: <span class="mono">${s.bookingId || 'CONFIRMED'}</span>. If you release this reservation, students waiting in the queue will automatically be confirmed.</p>
+            </div>
+            <button class="btn-release-slot" id="panel-btn-release" data-bid="${s.bookingId}">🚫 Release / Cancel My Slot</button>
+          ` : s.myWaitlist ? `
+            <div class="queue-info-box">
+              <strong>Position in Waiting Queue: ${s.myWaitlist.queueCode}</strong>
+              <p>You are in line for this slot. If the confirmed student cancels or releases, you will be promoted to CONFIRMED automatically!</p>
+            </div>
+            <button class="btn-action-sm danger" style="width:100%; justify-content:center; padding:12px;" id="panel-btn-leave-wl" data-wlid="${s.myWaitlist.waitlistId}">Leave Waiting Queue</button>
+          ` : s.status === 'booked' ? `
+            <div class="queue-info-box">
+              <strong>Slot is currently booked</strong>
+              <p>${s.waitlistCount === 0 ? 'Waiting queue is empty. You will be <strong>WL1</strong> (first in line).' : `There are ${s.waitlistCount} student(s) currently waiting in queue.`}</p>
+              <p style="margin-top:6px; font-size:12px; color:var(--tx3);">When the confirmed reservation is cancelled, WL1 is automatically promoted to CONFIRMED!</p>
+            </div>
+            <button class="btn-waitlist" id="panel-btn-join-wl" data-start="${s.startTime}" data-end="${s.endTime}">⚡ Join Waiting Queue (WL${s.waitlistCount + 1})</button>
+          ` : `
+            <div class="queue-info-box">
+              <strong>15-Minute Buffer Gap</strong>
+              <p>Mandatory transition window to ensure back-to-back sessions never overlap.</p>
+            </div>
+            <button class="btn-confirm" disabled>Buffer Window (Unavailable)</button>
+          `}
+        </div>
+      ` : `
+        <div class="panel-empty">
+          <div class="panel-empty-icon">📅</div>
+          <p>${isDayOff ? 'No slots available — faculty is off today.' : 'Select an available or booked slot to review options.'}</p>
+        </div>
+        <button class="btn-confirm" disabled>Select a time slot</button>
+      `}
+      ${errMsg ? `<div class="error-msg" role="alert">${errMsg}</div>` : ''}
+    </div>
+  `;
+}
+
+// ─── Confirmation ─────────────────────────────────────────────────────────────
+function renderConfirmation() {
+  const c = conf;
+  const f = selFaculty;
+  const s = c.slot;
+  const draftText = `Meeting with ${f.name}, ${s.host.date.split(',')[0]} ${s.host.start12} ${s.host.zone} (${s.booker.start12} ${s.booker.zone} for you).`;
+  const gcalUrl = makeGoogleCalendarUrl(s, f, c.bookingId);
+
+  return `
+    <div class="conf-card">
+      <div class="conf-header-badge">
+        <div class="conf-check">✓</div>
+        <span class="conf-status-tag">Conflict-Protected</span>
+      </div>
+      <h2 class="conf-title">Booking Confirmed</h2>
+
+      <!-- Dual-Timezone Auto-Generated Reminder Draft -->
+      <div class="conf-reminder-box">
+        <div class="conf-reminder-header">
+          <span class="conf-reminder-title">✨ Dual-Timezone Reminder Draft</span>
+          <button class="btn-copy-draft" id="btn-copy-draft" data-copy="${escapeHtml(draftText)}">📋 Copy Draft</button>
+        </div>
+        <div class="conf-reminder-text">${draftText}</div>
+      </div>
+
+      <!-- Add to Google / Apple Calendar -->
+      <div class="conf-cal-buttons">
+        <a class="btn-cal" href="${gcalUrl}" target="_blank" rel="noopener">
+          <span>📅 Add to Google Calendar</span>
+        </a>
+        <button class="btn-cal" id="btn-download-ics">
+          <span>🍏 Apple / Outlook (.ics)</span>
+        </button>
+      </div>
+
+      <div class="conf-rows">
+        <div class="conf-row"><span>Booking ID</span><span class="mono">${c.bookingId}</span></div>
+        <div class="conf-row"><span>Faculty</span><span>${f.name}</span></div>
+        <div class="conf-row"><span>Department</span><span>${f.department}</span></div>
+        <div class="conf-row"><span>Location</span><span>${f.location}</span></div>
+        <div class="conf-row"><span>Faculty Date</span><span>${s.host.date}</span></div>
+        <div class="conf-row highlight"><span>Faculty time</span><span>${s.host.start12} – ${s.host.end12} ${s.host.zone}</span></div>
+        <div class="conf-row highlight"><span>Your local time</span><span>${s.booker.start12} – ${s.booker.end12} ${s.booker.zone}<br><small>${s.booker.date}</small></span></div>
+        <div class="conf-row"><span>Your timezone</span><span>${tz}</span></div>
+        <div class="conf-row"><span>Duration</span><span>${DUR} minutes</span></div>
+        <div class="conf-row"><span>UTC stored</span><span class="mono">${s.utc.start} – ${s.utc.end} UTC</span></div>
+      </div>
+
+      <button class="btn-release-slot" id="btn-release-current" data-bid="${c.bookingId}">🚫 Release / Cancel This Slot</button>
+      <button class="btn-again" id="btn-again">Book another slot</button>
+    </div>
+  `;
+}
+
+// ─── Event bindings ───────────────────────────────────────────────────────────
+function bindEvents() {
+  // Faculty change
+  $('#btn-change-fac')?.addEventListener('click', () => {
+    selFaculty = null; selDate = null; selSlot = null; conf = null; slotsData = {};
+    $('#root').innerHTML = renderFacultyPicker();
+    bindFacultyPicker();
+  });
+
+  // Date selection
+  $$('[data-d]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('dayoff') || btn.disabled) return;
+      selDate = btn.dataset.d;
+      selSlot = null; conf = null; errMsg = '';
+      render();
+    });
+  });
+
+  // Slot selection
+  $$('[data-s]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selSlot = btn.dataset.s;
+      conf = null; errMsg = '';
+      render();
+    });
+  });
+
+  // Confirm booking
+  $('#btn-confirm')?.addEventListener('click', async () => {
+    const btn = $('#btn-confirm');
+    if (!selSlot || !selFaculty) return;
+    btn.disabled = true; btn.textContent = 'Booking…';
+
+    const res = await api('/slots?' + qs({ facultyId: selFaculty.id, date: selDate, duration: DUR, bookerTz: tz }));
+    const slot = (res.body.slots || []).find(s => s.startTime === selSlot);
+    if (!slot || slot.status !== 'available') {
+      errMsg = 'Slot is no longer available. Please select another slot or join the waitlist.';
+      selSlot = null; render(); return;
+    }
+
+    const r = await api('/bookings', {
+      method: 'POST',
+      body: JSON.stringify({ facultyId: selFaculty.id, startTime: slot.startTime, endTime: slot.endTime, idempotencyKey: ME + '-' + selSlot })
+    });
+    if (r.status === 201 || r.status === 200) {
+      conf = { ...r.body, slot };
+      errMsg = '';
+      slotsData = {};
+      updateBadgeCounts();
+    } else {
+      errMsg = r.status === 409 ? 'That slot was just booked by another student — you can join the waiting queue!' : 'Could not book: ' + (r.body.error || r.status);
+      slotsData = {};
+    }
+    render();
+  });
+
+  // Join waitlist from panel
+  $('#panel-btn-join-wl')?.addEventListener('click', async () => {
+    const btn = $('#panel-btn-join-wl');
+    const { start, end } = btn.dataset;
+    btn.disabled = true; btn.textContent = 'Joining queue…';
+
+    const r = await api('/waitlist', {
+      method: 'POST',
+      body: JSON.stringify({ facultyId: selFaculty.id, startTime: start, endTime: end })
+    });
+    if (r.status === 201) {
+      showToast(r.body.message || `Joined queue as ${r.body.queueCode}!`, '★');
+      slotsData = {};
+      await render();
+      updateBadgeCounts();
+    } else {
+      alert('Could not join waitlist: ' + (r.body.error || 'Unknown error'));
+      btn.disabled = false;
+    }
+  });
+
+  // Leave waitlist from panel
+  $('#panel-btn-leave-wl')?.addEventListener('click', async () => {
+    const btn = $('#panel-btn-leave-wl');
+    const wlid = btn.dataset.wlid;
+    if (!confirm('Leave the waiting queue for this slot?')) return;
+    btn.disabled = true;
+
+    const r = await api(`/waitlist/${wlid}/leave`, { method: 'POST' });
+    if (r.status === 200) {
+      showToast('Removed from waiting queue.', '✓');
+      slotsData = {};
+      selSlot = null;
+      await render();
+      updateBadgeCounts();
+    } else {
+      alert('Error: ' + (r.body.error || 'Could not leave waitlist'));
+    }
+  });
+
+  // Release slot from panel
+  $('#panel-btn-release')?.addEventListener('click', async () => {
+    const btn = $('#panel-btn-release');
+    const bid = btn.dataset.bid;
+    if (!confirm('Are you sure you want to cancel and release this reservation? If a student is waiting in queue, they will be automatically promoted to CONFIRMED.')) return;
+    btn.disabled = true;
+
+    const r = await api(`/bookings/${bid}/release`, { method: 'POST', body: JSON.stringify({ reason: 'Student released reservation' }) });
+    if (r.status === 200) {
+      const promo = r.body?.promoted;
+      if (promo) {
+        alert(`✓ Slot released!\n\n🎉 Waiting queue student ${promo.studentName} (${promo.studentId}) was automatically promoted to CONFIRMED!`);
+      } else {
+        alert('✓ Slot released! It is now instantly available for other students.');
+      }
+      slotsData = {};
+      selSlot = null;
+      await render();
+      updateBadgeCounts();
+    } else {
+      alert('Could not release: ' + (r.body.error || 'Error'));
+    }
+  });
+
+  // Book another
+  $('#btn-again')?.addEventListener('click', () => {
+    conf = null; selSlot = null; errMsg = ''; slotsData = {};
+    render();
+  });
+
+  // Copy draft button on confirmation card
+  $('#btn-copy-draft')?.addEventListener('click', (e) => {
+    const text = e.currentTarget.dataset.copy;
+    if (text) {
+      navigator.clipboard.writeText(text).then(() => {
+        e.currentTarget.textContent = '✓ Copied!';
+        e.currentTarget.classList.add('copied');
+        setTimeout(() => {
+          e.currentTarget.textContent = '📋 Copy Draft';
+          e.currentTarget.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  });
+
+  // Download ICS on confirmation card
+  $('#btn-download-ics')?.addEventListener('click', () => {
+    if (conf && conf.slot && selFaculty) {
+      downloadIcsFile(conf.slot, selFaculty, conf.bookingId);
+    }
+  });
+
+  // Release current slot on confirmation card
+  $('#btn-release-current')?.addEventListener('click', async (e) => {
+    const bid = e.currentTarget.dataset.bid;
+    if (!bid) return;
+    if (!confirm('Are you sure you want to cancel and release this reservation? If a student is on the waitlist, they will be automatically confirmed.')) return;
+    const r = await api(`/bookings/${bid}/release`, { method: 'POST', body: JSON.stringify({ reason: 'Student cancelled from confirmation' }) });
+    if (r.status === 200) {
+      const promo = r.body?.promoted;
+      if (promo) {
+        alert(`✓ Slot released!\n\n🎉 Waiting queue student ${promo.studentName} (${promo.studentId}) was automatically promoted to CONFIRMED!`);
+      } else {
+        alert('✓ Slot released! It is now instantly available for other students.');
+      }
+      conf = null;
+      selSlot = null;
+      slotsData = {};
+      render();
+      updateBadgeCounts();
+    } else {
+      alert('Could not release: ' + (r.body?.error || 'Unknown error'));
+    }
+  });
+}
+
+// ─── AI Natural-Language Booking ──────────────────────────────────────────────
+async function handleNlpSearch(queryText) {
+  const input = $('#nlp-input');
+  const btn = $('#nlp-submit');
+  const q = (queryText || (input ? input.value : '') || '').trim();
+  if (!q) return;
+  if (input) input.value = q;
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>Parsing…</span> <span class="nlp-sparkle">✨</span>';
+  }
+
+  try {
+    const res = await api('/natural-booking', {
+      method: 'POST',
+      body: JSON.stringify({ query: q, bookerTz: tz })
+    });
+
+    if (res.status === 200 && res.body.success) {
+      nlpResult = res.body;
+      const parsed = res.body.parsed;
+
+      // Select parsed faculty
+      const fac = facultyList.find(f => f.id === parsed.facultyId);
+      if (fac) selFaculty = fac;
+
+      // Set date & reset slot selection
+      selDate = parsed.date;
+      selSlot = null;
+      conf = null;
+
+      // Collect matching slot startTimes for highlight
+      aiMatchingSlotTimes = new Set((res.body.matchingSlots || []).map(s => s.startTime));
+
+      // Invalidate slotsData for this date to force fresh load
+      delete slotsData[selDate];
+
+      renderNlpResult(nlpResult);
+      renderAiOptions(nlpResult);
+    } else {
+      renderNlpResult({
+        parsed: { facultyName: 'Assistant', duration: 30, dateFormatted: 'Today', timeWindowLabel: 'Any' },
+        message: 'Could not parse query: ' + (res.body?.error || 'Please try rephrasing.')
+      });
+      renderAiOptions(null);
+    }
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>Find Options</span> <span class="nlp-sparkle">✨</span>';
+    }
+  }
+}
+
+function renderNlpResult(res) {
+  const container = $('#nlp-result-container');
+  if (!container) return;
+  if (!res) {
+    container.innerHTML = '';
+    return;
+  }
+  const p = res.parsed || {};
+  const isDayOff = res.dayOff;
+  const matchCount = (res.matchingSlots || []).length;
+
+  container.innerHTML = `
+    <div class="nlp-result">
+      <div class="nlp-result-top">
+        <div class="nlp-extracted-tags">
+          <span class="nlp-tag">Faculty: <strong>${p.facultyName || 'Selected'}</strong></span>
+          <span class="nlp-tag">Duration: <strong>${p.duration || 30} mins</strong></span>
+          <span class="nlp-tag">Target Date: <strong>${p.dateFormatted || p.date}</strong></span>
+          <span class="nlp-tag">Window: <strong>${p.timeWindowLabel || 'Any time'}</strong></span>
+        </div>
+      </div>
+      <div class="nlp-result-msg ${isDayOff ? 'dayoff' : matchCount > 0 ? 'success' : 'partial'}">
+        ${res.message || ''}
+      </div>
+      <div class="nlp-principle-note">
+        🛡️ Correctness Guarantee: The AI only parsed your text into structured filters. The real scheduling engine verified timezone offsets, 15-min buffers, and working hours.
+      </div>
+    </div>
+  `;
+}
+
+function renderAiOptions(res) {
+  const container = $('#ai-options-container');
+  if (!container) return;
+  if (!res) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const p = res.parsed || {};
+  const isDayOff = res.dayOff;
+  const slots = res.matchingSlots || [];
+  const altSlots = res.alternativeSlots || [];
+  const altDateFmt = res.alternativeDateFormatted;
+
+  if (isDayOff) {
+    if (altSlots.length > 0) {
+      container.innerHTML = `
+        <div class="ai-options-section">
+          <div class="ai-alt-box">
+            <div class="ai-alt-title">💡 Alternative Options on ${altDateFmt} (${p.timeWindowLabel}):</div>
+            <p style="font-size:13px; color:var(--tx2); margin-bottom:14px;">
+              Because ${p.facultyName} is marked unavailable on ${p.dateFormatted}, the scheduling engine verified these available options on the next working day:
+            </p>
+            <div class="ai-cards-grid">
+              ${renderOptionCards(altSlots, p.facultyId, p.duration)}
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div class="ai-options-section">
+          <div class="ai-empty-box">
+            No alternative options found in this time window. Try asking for a different day or time window.
+          </div>
+        </div>
+      `;
+    }
+    bindAiOptionCardButtons();
+    return;
+  }
+
+  if (!slots.length) {
+    const otherSlots = res.allAvailableSlots || [];
+    if (otherSlots.length > 0) {
+      container.innerHTML = `
+        <div class="ai-options-section">
+          <div class="ai-alt-box">
+            <div class="ai-alt-title">Notice: No free slots in the ${p.timeWindowLabel} window on ${p.dateFormatted}</div>
+            <p style="font-size:13px; color:var(--tx2); margin-bottom:14px;">
+              The requested ${p.timeWindowLabel} window is already booked or in buffer periods. Here are ${otherSlots.length} available slots at other times on ${p.dateFormatted}:
+            </p>
+            <div class="ai-cards-grid">
+              ${renderOptionCards(otherSlots, p.facultyId, p.duration)}
+            </div>
+          </div>
+        </div>
+      `;
+      bindAiOptionCardButtons();
+    } else {
+      container.innerHTML = `
+        <div class="ai-options-section">
+          <div class="ai-empty-box">
+            No free slots available on <strong>${p.dateFormatted}</strong>.<br>
+            <span style="color:var(--tx3); font-size:12px; margin-top:6px; display:inline-block;">All slots are booked or faculty is unavailable.</span>
+          </div>
+        </div>
+      `;
+    }
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="ai-options-section">
+      <div class="ai-options-header">
+        <div>
+          <h2 class="ai-options-title">Available Options for ${p.dateFormatted} (${p.timeWindowLabel})</h2>
+          <span class="ai-options-sub">${slots.length} available options found · ${p.duration} mins · Timezone-converted & buffer-verified</span>
+        </div>
+      </div>
+      <div class="ai-cards-grid">
+        ${renderOptionCards(slots, p.facultyId, p.duration)}
+      </div>
+    </div>
+  `;
+
+  bindAiOptionCardButtons();
+}
+
+function renderOptionCards(slotsList, facultyId, duration) {
+  return slotsList.map((s, idx) => {
+    const isBooked = s.status === 'booked';
+    return `
+      <div class="ai-option-card ${isBooked ? 'booked' : ''}" id="ai-opt-${idx}">
+        <div class="ai-card-content">
+          <div class="ai-card-tz-pill">
+            <span class="ai-pill-icon">🌍</span>
+            <span>Your timezone: <strong>${s.booker.zone}</strong> (${s.booker.timezone})</span>
+          </div>
+          <div class="ai-card-time-main">
+            ${s.booker.start12} – ${s.booker.end12} <span class="ai-tz-abbr">${s.booker.zone}</span>
+          </div>
+          <div class="ai-card-date-badge">${s.booker.date}</div>
+
+          <div class="ai-card-divider"></div>
+
+          <div class="ai-card-host-section">
+            <span class="ai-host-label">Faculty time (${s.host.zone}):</span>
+            <strong class="ai-host-val">${s.host.start12} – ${s.host.end12} ${s.host.zone}</strong>
+            <span class="ai-host-date">${s.host.date}</span>
+          </div>
+
+          <div class="ai-card-utc">Stored in DB as UTC: ${s.utc.start} – ${s.utc.end} UTC</div>
+        </div>
+
+        ${isBooked ? `
+          <button
+            class="ai-card-btn"
+            style="background:var(--ac); color:#000;"
+            data-action="wl"
+            data-fid="${facultyId}"
+            data-start="${s.startTime}"
+            data-end="${s.endTime}">
+            ⚡ Join Waiting Queue (WL) →
+          </button>
+        ` : `
+          <button
+            class="ai-card-btn"
+            data-action="book"
+            data-fid="${facultyId}"
+            data-start="${s.startTime}"
+            data-end="${s.endTime}"
+            data-dur="${duration}">
+            Book This Slot →
+          </button>
+        `}
+      </div>
+    `;
+  }).join('');
+}
+
+function bindAiOptionCardButtons() {
+  $$('.ai-card-btn:not([disabled])').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const { action, fid, start, end } = btn.dataset;
+
+      if (action === 'wl') {
+        btn.disabled = true;
+        btn.textContent = 'Joining queue…';
+        const res = await api('/waitlist', {
+          method: 'POST',
+          body: JSON.stringify({ facultyId: fid, startTime: start, endTime: end })
+        });
+        if (res.status === 201) {
+          btn.style.background = 'var(--card2)';
+          btn.style.color = 'var(--ac)';
+          btn.textContent = `★ In Queue (${res.body.queueCode})`;
+          showToast(`Joined waiting queue as ${res.body.queueCode}!`, '★');
+          slotsData = {};
+          updateBadgeCounts();
+        } else {
+          alert('Could not join queue: ' + (res.body?.error || 'Error'));
+          btn.disabled = false;
+        }
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Booking…';
+
+      try {
+        const r = await api('/bookings', {
+          method: 'POST',
+          body: JSON.stringify({
+            facultyId: fid,
+            startTime: start,
+            endTime: end,
+            idempotencyKey: ME + '-ai-' + start
+          })
+        });
+
+        if (r.status === 201 || r.status === 200) {
+          const bookingData = r.body;
+          btn.style.background = 'var(--card2)';
+          btn.style.borderColor = 'var(--ok)';
+          btn.style.color = 'var(--ok)';
+          btn.disabled = true;
+          btn.textContent = '✓ Confirmed (' + (bookingData.bookingId || 'Booked') + ')';
+
+          slotsData = {};
+          updateBadgeCounts();
+
+          const fac = facultyList.find(f => f.id === fid);
+          if (fac) selFaculty = fac;
+          selDate = start.slice(0, 10);
+          selSlot = start;
+
+          const card = btn.closest('.ai-option-card');
+          if (card) {
+            card.classList.add('booked');
+            const viewHomeBtn = document.createElement('button');
+            viewHomeBtn.className = 'ai-card-view-btn';
+            viewHomeBtn.textContent = '📅 View Booked Slot on Home Calendar →';
+            viewHomeBtn.onclick = () => {
+              $('#tab-book').click();
+            };
+            card.appendChild(viewHomeBtn);
+          }
+
+          showToast(`Booking Confirmed! ID: ${bookingData.bookingId}`, '✓');
+        } else {
+          btn.style.background = 'var(--bad)';
+          btn.style.color = '#fff';
+          btn.disabled = true;
+          btn.textContent = r.status === 409 ? 'Slot Already Taken' : 'Error';
+          alert('Could not book: ' + (r.body.error || 'Conflict: Slot is no longer available.'));
+          slotsData = {};
+        }
+      } catch (err) {
+        console.error(err);
+        btn.disabled = false;
+        btn.textContent = 'Retry Booking';
+      }
+    });
+  });
+}
+
+function bindNavTabs() {
+  const tabBook = $('#tab-book');
+  const tabAi = $('#tab-ai');
+  const tabMy = $('#tab-my');
+  const tabLab = $('#tab-lab');
+  const viewBook = $('#view-book');
+  const viewAi = $('#view-ai');
+  const viewMy = $('#view-my');
+  const viewLab = $('#view-lab');
+
+  function switchTab(activeTab, activeView) {
+    [tabBook, tabAi, tabMy, tabLab].forEach(t => t?.classList.remove('active'));
+    [viewBook, viewAi, viewMy, viewLab].forEach(v => v?.classList.remove('active'));
+    activeTab?.classList.add('active');
+    activeView?.classList.add('active');
+  }
+
+  tabBook?.addEventListener('click', async () => {
+    switchTab(tabBook, viewBook);
+    slotsData = {};
+    await render();
+  });
+
+  tabAi?.addEventListener('click', () => {
+    switchTab(tabAi, viewAi);
+  });
+
+  tabMy?.addEventListener('click', async () => {
+    switchTab(tabMy, viewMy);
+    await renderMyBookings();
+  });
+
+  tabLab?.addEventListener('click', async () => {
+    switchTab(tabLab, viewLab);
+    await renderLabView();
+  });
+}
+
+function bindNlpChips() {
+  $$('.nlp-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const q = chip.dataset.q;
+      if (q) handleNlpSearch(q);
+    });
+  });
+}
+
+// ─── Helpers: Calendar Links & File Export ──────────────────────────────────
+function toCompactUtc(isoStr) {
+  if (!isoStr) return '';
+  return isoStr.replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+function makeGoogleCalendarUrl(slot, faculty, bookingId) {
+  const start = toCompactUtc(slot.startTime);
+  const end = toCompactUtc(slot.endTime);
+  const title = `Office Hours: ${faculty.name}`;
+  const details = `Office Hours with ${faculty.name} (Booking Reference: ${bookingId})\n\n` +
+    `Faculty Time: ${slot.host.start12} - ${slot.host.end12} ${slot.host.zone}\n` +
+    `Your Local Time: ${slot.booker.start12} - ${slot.booker.end12} ${slot.booker.zone}\n` +
+    `Location: ${faculty.location || 'Faculty Lab / Office'}`;
+  const location = faculty.location || '';
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${start}/${end}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(location)}`;
+}
+
+function downloadIcsFile(slot, faculty, bookingId) {
+  const start = toCompactUtc(slot.startTime);
+  const end = toCompactUtc(slot.endTime);
+  const now = toCompactUtc(new Date().toISOString());
+  const icsLines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Smart Slot Booking//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:booking-${bookingId}@smartslotbooking`,
+    `DTSTAMP:${now}`,
+    `DTSTART:${start}`,
+    `DTEND:${end}`,
+    `SUMMARY:Office Hours: ${faculty.name}`,
+    `DESCRIPTION:Meeting with ${faculty.name}.\nFaculty time: ${slot.host.start12} - ${slot.host.end12} ${slot.host.zone}\nYour local: ${slot.booker.start12} - ${slot.booker.end12} ${slot.booker.zone}`,
+    `LOCATION:${faculty.location || 'Faculty Office'}`,
+    'STATUS:CONFIRMED',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ];
+  const blob = new Blob([icsLines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `office-hours-${(faculty.name || 'meeting').replace(/[^a-zA-Z0-9]/g, '_')}-${bookingId}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function escapeHtml(str) {
+  return (str || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ─── My Bookings & Waiting Queue View ────────────────────────────────────────
+async function renderMyBookings() {
+  const listEl = $('#my-bookings-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="text-align:center; padding:30px; color:var(--tx2);">Loading your reservations & waiting queue…</div>';
+
+  try {
+    const [resBk, resWl] = await Promise.all([
+      api('/bookings/history'),
+      api('/waitlist/my')
+    ]);
+
+    const bookings = (resBk.body?.bookings || []).filter(b => b.status === 'CONFIRMED');
+    const waitlists = resWl.body?.waitlist || [];
+
+    updateBadgeCounts();
+
+    if (!bookings.length && !waitlists.length) {
+      listEl.innerHTML = `
+        <div class="ai-empty-box">
+          <div style="font-size:32px; margin-bottom:10px;">📅</div>
+          <strong>No active reservations or queue positions</strong>
+          <p style="margin-top:6px; font-size:13px; color:var(--tx3);">You don't have any bookings or waitlist spots under account <strong>${currentUserObj?.name || ME}</strong>.</p>
+        </div>
+      `;
+      return;
+    }
+
+    let html = '';
+
+    // Section 1: Confirmed Bookings
+    html += `
+      <div class="section-subtitle">
+        <span>📅 Confirmed Reservations</span>
+        <span class="count-badge">${bookings.length}</span>
+      </div>
+    `;
+
+    if (!bookings.length) {
+      html += `<div style="padding:16px; background:var(--card); border:1px dashed var(--line); border-radius:10px; color:var(--tx3); font-size:13px;">No confirmed reservations currently.</div>`;
+    } else {
+      html += `
+        <div class="my-bookings-grid">
+          ${bookings.map(b => {
+            const sDate = new Date(b.startTime);
+            const eDate = new Date(b.endTime);
+            const hTz = b.facultyTimezone || 'Asia/Kolkata';
+            const bTz = tz;
+
+            const hStart = sDate.toLocaleTimeString('en-US', { timeZone: hTz, hour: 'numeric', minute: '2-digit' });
+            const hEnd = eDate.toLocaleTimeString('en-US', { timeZone: hTz, hour: 'numeric', minute: '2-digit' });
+            const hDay = sDate.toLocaleDateString('en-US', { timeZone: hTz, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            const hZone = hTz === 'Asia/Kolkata' ? 'IST' : 'Host';
+
+            const bStart = sDate.toLocaleTimeString('en-US', { timeZone: bTz, hour: 'numeric', minute: '2-digit' });
+            const bEnd = eDate.toLocaleTimeString('en-US', { timeZone: bTz, hour: 'numeric', minute: '2-digit' });
+            const bDay = sDate.toLocaleDateString('en-US', { timeZone: bTz, weekday: 'short', month: 'short', day: 'numeric' });
+            const bZone = bTz.split('/').pop().replace('_', ' ');
+
+            const oneLiner = `Meeting with ${b.facultyName}, ${hDay.split(',')[0]} ${hStart} ${hZone} (${bStart} ${bZone} for you).`;
+            const slotMock = {
+              startTime: b.startTime,
+              endTime: b.endTime,
+              host: { start12: hStart, end12: hEnd, zone: hZone, date: hDay },
+              booker: { start12: bStart, end12: bEnd, zone: bZone, date: bDay }
+            };
+            const facMock = { name: b.facultyName, location: b.location };
+            const gcalUrl = makeGoogleCalendarUrl(slotMock, facMock, b.bookingId);
+
+            return `
+              <div class="my-booking-card confirmed" id="my-bk-${b.bookingId}">
+                <div class="my-booking-top">
+                  <div>
+                    <div class="my-booking-fac">${b.facultyName}</div>
+                    <div class="my-booking-dept">${b.department || ''} · ${b.location || 'Campus'}</div>
+                  </div>
+                  <span class="conf-status-tag">CONFIRMED · Ref ${b.bookingId}</span>
+                </div>
+
+                <div class="my-booking-times">
+                  <div class="my-time-cell">
+                    <div class="my-time-label">Faculty Time (${hZone})</div>
+                    <div class="my-time-val">${hStart} – ${hEnd}</div>
+                    <div class="my-time-date">${hDay}</div>
+                  </div>
+                  <div class="my-time-cell" style="border-color:rgba(255,183,3,.3); background:rgba(255,183,3,.04);">
+                    <div class="my-time-label" style="color:var(--ac);">Your Local Time</div>
+                    <div class="my-time-val">${bStart} – ${bEnd} <span style="font-size:11px; color:var(--tx2); font-weight:normal;">(${bZone})</span></div>
+                    <div class="my-time-date">${bDay}</div>
+                  </div>
+                </div>
+
+                <div class="conf-reminder-box" style="margin: 10px 0;">
+                  <div class="conf-reminder-header">
+                    <span class="conf-reminder-title">✨ Dual-Timezone Reminder Draft</span>
+                    <button class="btn-copy-draft" data-copy="${escapeHtml(oneLiner)}">📋 Copy Draft</button>
+                  </div>
+                  <div class="conf-reminder-text">${oneLiner}</div>
+                </div>
+
+                <div class="my-booking-actions">
+                  <a class="btn-action-sm" href="${gcalUrl}" target="_blank" rel="noopener">
+                    <span>📅 Google Calendar</span>
+                  </a>
+                  <button class="btn-action-sm" data-ics-bid="${b.bookingId}">
+                    <span>🍏 Apple / Outlook (.ics)</span>
+                  </button>
+                  <button class="btn-action-sm danger" data-release-bid="${b.bookingId}">
+                    <span>🚫 Cancel & Release Slot</span>
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    // Section 2: Waiting Queue Positions
+    html += `
+      <div class="section-subtitle">
+        <span>★ Waiting Queue (Waitlist Positions)</span>
+        <span class="count-badge">${waitlists.length}</span>
+      </div>
+    `;
+
+    if (!waitlists.length) {
+      html += `<div style="padding:16px; background:var(--card); border:1px dashed var(--line); border-radius:10px; color:var(--tx3); font-size:13px;">You are not in any waiting queues. When a slot is booked, you can join the queue to be automatically promoted if it is released!</div>`;
+    } else {
+      html += `
+        <div class="my-bookings-grid">
+          ${waitlists.map(w => {
+            const sDate = new Date(w.startTime);
+            const eDate = new Date(w.endTime);
+            const hTz = w.facultyTimezone || 'Asia/Kolkata';
+            const bTz = tz;
+
+            const hStart = sDate.toLocaleTimeString('en-US', { timeZone: hTz, hour: 'numeric', minute: '2-digit' });
+            const hEnd = eDate.toLocaleTimeString('en-US', { timeZone: hTz, hour: 'numeric', minute: '2-digit' });
+            const hDay = sDate.toLocaleDateString('en-US', { timeZone: hTz, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            const hZone = hTz === 'Asia/Kolkata' ? 'IST' : 'Host';
+
+            const bStart = sDate.toLocaleTimeString('en-US', { timeZone: bTz, hour: 'numeric', minute: '2-digit' });
+            const bEnd = eDate.toLocaleTimeString('en-US', { timeZone: bTz, hour: 'numeric', minute: '2-digit' });
+            const bDay = sDate.toLocaleDateString('en-US', { timeZone: bTz, weekday: 'short', month: 'short', day: 'numeric' });
+            const bZone = bTz.split('/').pop().replace('_', ' ');
+
+            const isWaiting = w.status === 'WAITING';
+            const isPromoted = w.status === 'PROMOTED';
+
+            return `
+              <div class="waitlist-card ${isWaiting ? 'waiting' : 'promoted'}">
+                <div class="my-booking-top">
+                  <div>
+                    <div class="my-booking-fac">${w.facultyName}</div>
+                    <div class="my-booking-dept">${w.department || ''} · ${w.location || 'Campus'}</div>
+                  </div>
+                  <span class="wl-queue-tag ${isPromoted ? 'promoted' : ''}">
+                    ${isPromoted ? '✓ PROMOTED · CONFIRMED' : `Position ${w.queueCode || 'WL'}`}
+                  </span>
+                </div>
+
+                <div class="my-booking-times">
+                  <div class="my-time-cell">
+                    <div class="my-time-label">Faculty Time (${hZone})</div>
+                    <div class="my-time-val">${hStart} – ${hEnd}</div>
+                    <div class="my-time-date">${hDay}</div>
+                  </div>
+                  <div class="my-time-cell" style="border-color:rgba(255,183,3,.3); background:rgba(255,183,3,.04);">
+                    <div class="my-time-label" style="color:var(--ac);">Your Local Time</div>
+                    <div class="my-time-val">${bStart} – ${bEnd} <span style="font-size:11px; color:var(--tx2); font-weight:normal;">(${bZone})</span></div>
+                    <div class="my-time-date">${bDay}</div>
+                  </div>
+                </div>
+
+                <div class="queue-info-box" style="margin: 12px 0;">
+                  ${isPromoted ? `
+                    <strong style="color:var(--ok);">✓ Promoted to Confirmed!</strong>
+                    <p>The previous student released this slot, and your reservation was automatically confirmed in PostgreSQL!</p>
+                  ` : `
+                    <strong>Waiting Queue: ${w.queueCode}</strong>
+                    <p>${w.position === 1 ? 'You are <strong>WL1 (first in line)</strong>! If the confirmed booker cancels, this slot transfers to you immediately.' : `You are position ${w.queueCode} in line. You will advance as earlier bookings cancel.`}</p>
+                  `}
+                </div>
+
+                <div class="my-booking-actions">
+                  ${isWaiting ? `
+                    <button class="btn-action-sm danger" data-leave-wlid="${w.waitlistId}">
+                      <span>🚫 Leave Waiting Queue</span>
+                    </button>
+                  ` : `
+                    <button class="btn-action-sm" style="color:var(--ok); border-color:var(--ok);" onclick="$('#tab-book').click()">
+                      <span>📅 View on Calendar →</span>
+                    </button>
+                  `}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    listEl.innerHTML = html;
+    bindMyBookingsActions(bookings);
+  } catch (err) {
+    console.error(err);
+    listEl.innerHTML = '<div class="error-msg">Failed to load reservations and waiting queue.</div>';
+  }
+}
+
+function bindMyBookingsActions(bookings) {
+  // Copy draft
+  $$('#my-bookings-list .btn-copy-draft').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const text = e.currentTarget.dataset.copy;
+      if (text) {
+        navigator.clipboard.writeText(text).then(() => {
+          e.currentTarget.textContent = '✓ Copied!';
+          e.currentTarget.classList.add('copied');
+          setTimeout(() => {
+            e.currentTarget.textContent = '📋 Copy Draft';
+            e.currentTarget.classList.remove('copied');
+          }, 2000);
+        });
+      }
+    });
+  });
+
+  // Download ICS
+  $$('#my-bookings-list [data-ics-bid]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bid = btn.dataset.icsBid;
+      const b = bookings.find(x => x.bookingId === bid);
+      if (b) {
+        const sDate = new Date(b.startTime);
+        const eDate = new Date(b.endTime);
+        const hTz = b.facultyTimezone || 'Asia/Kolkata';
+        const hStart = sDate.toLocaleTimeString('en-US', { timeZone: hTz, hour: 'numeric', minute: '2-digit' });
+        const hEnd = eDate.toLocaleTimeString('en-US', { timeZone: hTz, hour: 'numeric', minute: '2-digit' });
+        const slotMock = {
+          startTime: b.startTime,
+          endTime: b.endTime,
+          host: { start12: hStart, end12: hEnd, zone: hTz === 'Asia/Kolkata' ? 'IST' : 'Host' },
+          booker: { start12: '', end12: '', zone: tz }
+        };
+        downloadIcsFile(slotMock, { name: b.facultyName, location: b.location }, b.bookingId);
+      }
+    });
+  });
+
+  // Cancel & Release confirmed booking
+  $$('#my-bookings-list [data-release-bid]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const bid = btn.dataset.releaseBid;
+      if (!confirm('Are you sure you want to cancel and release this reservation? If any student is on the waiting queue, they will be automatically promoted to CONFIRMED.')) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Releasing…';
+
+      const res = await api(`/bookings/${bid}/release`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Student released reservation from My Bookings' })
+      });
+
+      if (res.status === 200) {
+        slotsData = {};
+        const promo = res.body?.promoted;
+        if (promo) {
+          alert(`✓ Reservation Released!\n\n🎉 Waiting queue student ${promo.studentName} (${promo.studentId}) was automatically promoted to CONFIRMED!`);
+        } else {
+          alert('✓ Reservation Released! The slot is now instantly open for other students.');
+        }
+        await renderMyBookings();
+        updateBadgeCounts();
+      } else {
+        alert('Could not release slot: ' + (res.body?.error || 'Unknown error'));
+        btn.disabled = false;
+        btn.textContent = '🚫 Cancel & Release Slot';
+      }
+    });
+  });
+
+  // Leave waiting queue
+  $$('#my-bookings-list [data-leave-wlid]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const wlid = btn.dataset.leaveWlid;
+      if (!confirm('Leave the waiting queue for this slot?')) return;
+      btn.disabled = true;
+
+      const res = await api(`/waitlist/${wlid}/leave`, { method: 'POST' });
+      if (res.status === 200) {
+        showToast('Removed from waiting queue.', '✓');
+        slotsData = {};
+        await renderMyBookings();
+        updateBadgeCounts();
+      } else {
+        alert('Could not leave waitlist: ' + (res.body?.error || 'Unknown error'));
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+// ─── Concurrency & Queue Live Lab ─────────────────────────────────────────────
+async function renderLabView() {
+  const container = $('#lab-container-root');
+  if (!container) return;
+
+  const fac = facultyList.find(f => f.id === 'fac_rao') || facultyList[0] || { id: 'fac_rao', name: 'Prof. K. Rao' };
+  const days = upcomingWeekdays(6);
+  const testDate = isoDate(days[2]); // Next Thu/Fri
+
+  container.innerHTML = `
+    <div class="lab-container">
+      <div class="lab-box">
+        <div class="lab-box-header">
+          <h2>1. Simulate Concurrent Booking Collision</h2>
+          <p>Test what happens when two students click "Book" at the exact same millisecond. The winner gets <strong>201 CONFIRMED</strong>. The second user is immediately blocked by PostgreSQL's GiST EXCLUDE constraint with <strong>409 CONFLICT</strong>.</p>
+        </div>
+
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-bottom:16px;">
+          <div>
+            <label style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--tx3); display:block; margin-bottom:6px;">Target Faculty</label>
+            <div style="padding:10px 14px; background:var(--surface); border:1px solid var(--line2); border-radius:8px; font-weight:600; font-size:13.5px;">${fac.name}</div>
+          </div>
+          <div>
+            <label style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--tx3); display:block; margin-bottom:6px;">Target Test Slot</label>
+            <div style="padding:10px 14px; background:var(--surface); border:1px solid var(--line2); border-radius:8px; font-size:13.5px;">${testDate} · 10:00 AM – 10:30 AM IST</div>
+          </div>
+        </div>
+
+        <div class="lab-grid-2">
+          <div class="lab-user-card" style="border-left: 3px solid var(--ac);">
+            <div class="lab-user-title">Competitor 1</div>
+            <div class="lab-user-name">Student A (student_A)</div>
+            <div class="lab-user-meta">America/Los_Angeles · Ready to send POST /api/bookings</div>
+          </div>
+          <div class="lab-user-card" style="border-left: 3px solid #60a5fa;">
+            <div class="lab-user-title">Competitor 2</div>
+            <div class="lab-user-name">Student B (student_B)</div>
+            <div class="lab-user-meta">America/Los_Angeles · Ready to send POST /api/bookings</div>
+          </div>
+        </div>
+
+        <div class="lab-action-bar">
+          <button class="btn-lab-fire" id="lab-btn-fire-race">
+            <span>⚡ Fire Simultaneous Booking Race</span>
+          </button>
+        </div>
+
+        <div id="lab-race-stage" style="margin-top:18px;"></div>
+      </div>
+    </div>
+  `;
+
+  bindLabEvents(fac.id, testDate);
+}
+
+function bindLabEvents(facultyId, dateIso) {
+  const startIso = `${dateIso}T04:30:00.000Z`; // 10:00 AM IST
+  const endIso = `${dateIso}T05:00:00.000Z`;   // 10:30 AM IST
+
+  let raceWinner = null;
+  let raceLoser = null;
+  let winnerBookingId = null;
+
+  $('#lab-btn-fire-race')?.addEventListener('click', async () => {
+    const btn = $('#lab-btn-fire-race');
+    const stage = $('#lab-race-stage');
+    btn.disabled = true;
+    btn.innerHTML = '<span>Firing simultaneous requests…</span> <span>⚡</span>';
+    stage.innerHTML = '<div style="color:var(--tx2); padding:10px;">Sending 2 concurrent HTTP requests to /api/bookings at the exact same millisecond…</div>';
+
+    try {
+      const res = await api('/demo/race', {
+        method: 'POST',
+        body: JSON.stringify({
+          facultyId,
+          startTime: startIso,
+          endTime: endIso,
+          student1: 'student_A',
+          student2: 'student_B'
+        })
+      });
+
+      const data = res.body;
+      const s1 = data.student1;
+      const s2 = data.student2;
+
+      raceWinner = s1.status === 201 ? s1 : (s2.status === 201 ? s2 : null);
+      raceLoser = s1.status === 409 ? s1 : (s2.status === 409 ? s2 : null);
+      winnerBookingId = raceWinner?.body?.bookingId;
+
+      stage.innerHTML = `
+        <div class="lab-output">
+          <div style="font-weight:700; margin-bottom:12px; color:var(--tx); font-size:13.5px;">
+            🏁 Concurrent Race Finished (Single millisecond collision):
+          </div>
+          <div style="margin-bottom:10px;">
+            <span class="lab-badge-${s1.status}">${s1.status} ${s1.status === 201 ? 'CONFIRMED' : 'CONFLICT'}</span>
+            <strong>Student A:</strong> ${s1.status === 201 ? `Won the slot! Booking ID: <code>${s1.body.bookingId}</code>` : `Blocked by PostgreSQL EXCLUDE constraint ("${s1.body.error}")`}
+          </div>
+          <div style="margin-bottom:14px;">
+            <span class="lab-badge-${s2.status}">${s2.status} ${s2.status === 201 ? 'CONFIRMED' : 'CONFLICT'}</span>
+            <strong>Student B:</strong> ${s2.status === 201 ? `Won the slot! Booking ID: <code>${s2.body.bookingId}</code>` : `Blocked by PostgreSQL EXCLUDE constraint ("${s2.body.error}")`}
+          </div>
+
+          ${raceLoser ? `
+            <div style="background:var(--surface); border:1px solid var(--line2); border-radius:10px; padding:16px; margin-top:16px;">
+              <div style="font-weight:700; color:var(--ac); margin-bottom:6px;">Next: ${raceLoser.studentId} Joins the Waiting Queue</div>
+              <p style="color:var(--tx2); font-size:12.5px; margin-bottom:12px;">Since ${raceLoser.studentId} was blocked, they can join the queue. They will be placed at position <strong>WL1</strong>.</p>
+              <button class="btn-waitlist" id="lab-btn-join-wl" style="width:auto; padding:10px 18px; font-size:13px;">
+                <span>⚡ ${raceLoser.studentId}: Join Waiting Queue (WL1)</span>
+              </button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      slotsData = {};
+      updateBadgeCounts();
+
+      // Step 2: Loser joins waitlist
+      $('#lab-btn-join-wl')?.addEventListener('click', async () => {
+        const wlBtn = $('#lab-btn-join-wl');
+        wlBtn.disabled = true;
+        wlBtn.textContent = 'Enrolling in waiting queue…';
+
+        const wlRes = await fetch('/api/waitlist', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-user-id': raceLoser.studentId },
+          body: JSON.stringify({ facultyId, startTime: startIso, endTime: endIso })
+        }).then(r => r.json());
+
+        stage.innerHTML += `
+          <div style="background:rgba(255,183,3,.08); border:1px solid rgba(255,183,3,.3); border-radius:10px; padding:16px; margin-top:16px;">
+            <div style="font-weight:700; color:var(--ac); margin-bottom:6px;">★ ${raceLoser.studentId} is now WL1 in the Waiting Queue!</div>
+            <p style="color:var(--tx2); font-size:12.5px; margin-bottom:12px;">Waitlist ID: <code>${wlRes.waitlistId}</code> · Position: <strong>WL1</strong>.</p>
+            <div style="font-weight:700; color:var(--tx); margin-bottom:6px;">Step 3: Test Automatic Promotion When Winner Cancels</div>
+            <p style="color:var(--tx2); font-size:12.5px; margin-bottom:12px;">When ${raceWinner.studentId} releases their reservation, the PostgreSQL transaction automatically promotes ${raceLoser.studentId} (WL1) to CONFIRMED!</p>
+            <button class="btn-release-slot" id="lab-btn-release-winner" style="width:auto; padding:10px 18px; font-size:13px;">
+              <span>🚫 ${raceWinner.studentId}: Cancel & Release Slot</span>
+            </button>
+          </div>
+        `;
+
+        slotsData = {};
+        updateBadgeCounts();
+
+        // Step 3: Winner releases slot -> Auto-promotes WL1!
+        $('#lab-btn-release-winner')?.addEventListener('click', async () => {
+          const relBtn = $('#lab-btn-release-winner');
+          relBtn.disabled = true;
+          relBtn.textContent = 'Releasing slot…';
+
+          const relRes = await fetch(`/api/bookings/${winnerBookingId}/release`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-user-id': raceWinner.studentId },
+            body: JSON.stringify({ reason: 'Released during lab verification' })
+          }).then(r => r.json());
+
+          const promo = relRes.promoted;
+
+          stage.innerHTML += `
+            <div style="background:var(--ok-bg); border:1px solid rgba(62,207,142,.35); border-radius:10px; padding:20px; margin-top:16px;">
+              <div style="font-weight:700; color:var(--ok); font-size:16px; margin-bottom:8px;">
+                🎉 Automatic Promotion Succeeded!
+              </div>
+              <p style="color:var(--tx); font-size:13.5px; line-height:1.6; margin-bottom:14px;">
+                ${raceWinner.studentId}'s booking was cancelled, and <strong>${promo?.studentName || raceLoser.studentId}</strong> was automatically promoted from WL1 to <strong>CONFIRMED</strong> (Booking Reference: <code>${promo?.bookingId}</code>)!<br>
+                15-minute conflict buffers were calculated and enforced in PostgreSQL.
+              </p>
+              <button class="btn-cal" id="lab-btn-switch-account" style="background:var(--ac); color:#000; font-weight:700;">
+                <span>👤 Switch Login to ${raceLoser.studentId} & View in My Bookings →</span>
+              </button>
+            </div>
+          `;
+
+          slotsData = {};
+          updateBadgeCounts();
+
+          $('#lab-btn-switch-account')?.addEventListener('click', async () => {
+            await switchUser(raceLoser.studentId);
+            $('#tab-my').click();
+          });
+        });
+      });
+    } catch (err) {
+      console.error(err);
+      stage.innerHTML = `<div class="error-msg">Error running race: ${err.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span>⚡ Fire Simultaneous Booking Race</span>';
+    }
+  });
+}
+
+// ─── Boot Application ─────────────────────────────────────────────────────────
+async function startApp() {
+  bindNavTabs();
+  bindNlpChips();
+  await init();
+}
+startApp();
+</script>
+</body>
+</html>
