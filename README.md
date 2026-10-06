@@ -1,71 +1,112 @@
 # Smart Slot Booking
 
-## Overview
-Faculty–student appointment booking with three guarantees, built from `docs/`:
-1. **Concurrency-safe booking**: exactly one of two simultaneous requests wins (`201`), the other gets `409`.
-2. **Real timezone handling**: slots are stored in UTC and converted on the server for host and booker.
-3. **Buffer enforcement**: a booking plus a 15-minute buffer is unavailable, enforced in the backend and the database.
+A concurrency-safe, timezone-aware appointment booking system for universities and faculty office hours. Built with Node.js, Express, PostgreSQL, and Vanilla JavaScript.
 
-## Features
-- Availability engine (source of truth): working hours + existing bookings + duration + buffer, all in UTC.
-- Booking service with idempotency key, release (`/release`) and history.
-- Dark scheduling dashboard (`/`) and a killer-test panel (`/demo.html`).
-- Suggestions: nearest free slots from real availability; they only pre-select a slot, never book.
-- Rule-based no-show reminder (`noShowCount >= 2` → early reminder + "Release my slot").
+---
 
-## Architecture
-```
-Browser UI → Express API → Booking Service → Atomic guard (PostgreSQL EXCLUDE constraint) → DB
-                    └→ Availability Engine → Suggestions
-```
-Concurrency guard: `EXCLUDE USING gist ("facultyId" WITH =, tstzrange("startTime","bufferEnd") WITH &&) WHERE (status='CONFIRMED')`
-(DATA_MODEL.md Option A). The pre-insert check in `booking.js` is only a fast path; the constraint decides.
+## Key Highlights
 
-## Tech Stack
-Node.js 20+, Express, PostgreSQL 16 (`btree_gist`), `pg`, `luxon` (IANA timezones), vanilla HTML/JS frontend.
+1. **Concurrency Safe (No Double-Bookings)**
+   - Uses PostgreSQL's atomic GiST exclusion constraint (`EXCLUDE USING gist`).
+   - If two students book the exact same slot at the exact same millisecond, exactly one gets `201 Created` and the other gets `409 Conflict`.
 
-## Local Setup
+2. **Natural-Language AI Assistant**
+   - Type plain English requests like: *"I need 30 mins with Prof. Rao sometime Thursday afternoon"*.
+   - Automatically extracts faculty, date range, duration, and time of day, returning real free slots.
+   - Zero hallucinations: availability is strictly verified by the backend slot engine.
+
+3. **FIFO Waiting Queue (WL1 Auto-Promotion)**
+   - When a slot is taken, students can join the waiting queue (`WL1`, `WL2`...).
+   - When the confirmed student cancels or releases their reservation, the queue automatically promotes `WL1` to `CONFIRMED` in a database transaction.
+
+4. **Real Dual-Timezone Handling**
+   - All slots are stored in UTC (`TIMESTAMPTZ`).
+   - Shows host time (e.g. `11:00 AM IST`) and student time (e.g. `10:30 PM PDT, prev day`) accurately without timezone bugs.
+
+5. **15-Minute Transition Buffer**
+   - Automatically enforces a mandatory 15-minute cool-down buffer after every meeting to prevent back-to-back overlaps.
+
+6. **1-Click Calendar Sync**
+   - Add confirmed bookings directly to Google Calendar or download Apple Calendar (`.ics`) with full meeting details and dual timezones.
+
+---
+
+## Quick Start (Run Locally)
+
+### 1. Prerequisites
+- Node.js (v18+)
+- PostgreSQL running locally or via Docker
+
+### 2. Setup Database
 ```bash
-docker compose up -d                 # PostgreSQL (or use any local Postgres 16)
-cd backend && npm install
+# Option A: With Docker
+docker compose up -d
+
+# Option B: With local PostgreSQL
+createdb ssb
+psql -d ssb -f database/schema.sql
+psql -d ssb -f database/seed.sql
+```
+
+### 3. Install Dependencies & Configure Environment
+```bash
+cd backend
+npm install
 cp ../.env.example .env
 ```
+*(Make sure `DATABASE_URL` in `backend/.env` points to your PostgreSQL database).*
 
-## Environment Variables
-See `.env.example`: `PORT`, `DATABASE_URL`, `BUFFER_MINUTES`, optional `LLM_API_KEY` (unused; suggestions are deterministic).
-
-## Database Setup
+### 4. Seed the Database
 ```bash
-cd backend && npm run db:init        # applies database/schema.sql + seed.sql (resets data)
+npm run db:init
 ```
 
-## Running the Application
+### 5. Start the Server
 ```bash
-cd backend && npm start
+npm start
 ```
-- Main UI: http://localhost:3000
-- Killer test panel: http://localhost:3000/demo.html
+Open **http://localhost:3000** in your browser.
 
-## API
-Follows `docs/API.md` for `GET /api/slots`, `POST /api/bookings`, `POST /api/bookings/:id/release`, `GET /api/bookings/history`.
-Additions: `bookerTz` and `step` query params on `/api/slots`, `GET /api/suggestions`, `GET /api/reminders`, `GET /api/faculty/:id`, `POST /api/demo/{timezone|buffer|concurrent}`.
-`POST /api/smart-booking` (natural language) is **not implemented** (out of scope for this prototype).
-The student is read from the `x-user-id` header (default `stu_you`); there is no authentication.
+---
 
-## Killer Tests
-Open http://localhost:3000/demo.html and press each button, or run all three from a terminal while the server is up:
+## Testing the 3 Killer Tests
+
+Run the automated test suite directly in your terminal:
 ```bash
-cd backend && npm run test:killer
+npm run test:killer
 ```
-### 1. Timezone Test
-Host `Asia/Kolkata`, booker `America/Los_Angeles`. 11:00 AM IST on 14 Oct 2026 must be stored as `05:30Z` and shown as `10:30 PM PDT` on Tue Oct 13.
-### 2. Buffer Test
-Booking 10:00–10:30 + 15 min buffer. `10:30` → 409, `10:40` → 409, `10:45` → 201 (engine status and real POST results are shown).
-### 3. Concurrent Booking Test
-Two real HTTP requests (Student A, Student B) are sent with `Promise.all` for the same slot.
-Expected: `201 Created`, `409 Conflict`, and 1 confirmed row in `Booking`.
 
-## Demo
-1. `docker compose up -d`, `npm run db:init`, `npm start` (in `backend/`).
-2. Open `/` → pick Wed 14 → select 11:00 → see host/local/UTC → Confirm. Switch the booker timezone in the header.
-3. Open `/demo.html` → run the three tests.
+### What gets verified:
+- **Test 1: Timezone Correctness** — Verifies `11:00 AM IST` correctly maps to `10:30 PM PDT` (previous day) and `05:30 UTC`.
+- **Test 2: Buffer Enforcement** — Verifies a booking at 10:00–10:30 with 15m buffer blocks `10:30` (409) and `10:40` (409), and opens at `10:45` (201).
+- **Test 3: Concurrency Race** — Fires two simultaneous requests from Student A and Student B at the exact same millisecond. Exactly 1 passes (201) and 1 is rejected by PostgreSQL (409).
+
+You can also test this interactively in the web UI under the **"Concurrency & Queue Lab"** tab.
+
+---
+
+## Project Structure
+
+```
+ssb/
+├── backend/
+│   ├── src/
+│   │   ├── booking.js        # Atomic booking service & queue auto-promotion
+│   │   ├── engine.js         # Deterministic slot availability & buffer engine
+│   │   ├── nlp.js            # Natural-language query parser
+│   │   ├── server.js         # Express REST API routes
+│   │   ├── db.js             # PostgreSQL connection pool
+│   │   └── demo.js           # Live test endpoints
+│   ├── scripts/init-db.js    # Database migration & seed runner
+│   └── tests/killer.js       # Automated test suite
+├── database/
+│   ├── schema.sql            # PostgreSQL tables & GiST exclusion constraints
+│   └── seed.sql              # Seed faculty, schedules, and test accounts
+├── frontend/
+│   ├── index.html            # Main UI (Booking, AI Assistant, My Bookings, Lab)
+│   ├── style.css             # Dark theme styling & responsive layout
+│   └── demo.html             # Standalone killer test panel
+├── docs/                     # Architectural specs and PRD documentation
+├── docker-compose.yml        # PostgreSQL container setup
+└── README.md
+```
