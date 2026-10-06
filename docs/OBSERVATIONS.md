@@ -1,123 +1,251 @@
 # Observations — Existing Booking Flow
 
-## 1. Booking Request Flow — Observed
-
-The standard booking path follows this sequence:
-
-```
-POST /api/book/event
-        ↓
-RegularBookingService.createBooking()
-        ↓
-ensureAvailableUsers()
-        ↓
-getUserAvailability() / _getBusyTimes()
-        ↓
-checkForConflicts()
-        ↓
-createBooking()
-        ↓
-saveBooking()
-        ↓
-tx.booking.create()
-```
-
-### Component Responsibilities
-
-| Step | Component | Role |
-| :--- | :--- | :--- |
-| 1 | `POST /api/book/event` | HTTP entry point; receives booking request payload |
-| 2 | `RegularBookingService.createBooking()` | Orchestrates the full booking lifecycle |
-| 3 | `ensureAvailableUsers()` | Filters eligible hosts; triggers availability check |
-| 4 | `getUserAvailability()` / `_getBusyTimes()` | Reads existing bookings + working hours; applies buffers; returns busy intervals |
-| 5 | `checkForConflicts()` | Compares requested slot against busy intervals; throws `NoAvailableUsersFound` on overlap |
-| 6 | `createBooking()` / `saveBooking()` | Constructs the booking record |
-| 7 | `tx.booking.create()` | Writes the booking to the database inside a Prisma transaction |
+> **Scope**: Static source-code analysis of the original scheduling implementation (`cal.diy`). No code was executed and no live tests were run. Every finding below is cited with its exact file path and line numbers.
 
 ---
 
-## 2. Pre-Booking Availability Check — Observed
+## 1. The Three Killer Tests — Verified Evidence
 
-**[OBSERVED]** The availability check (steps 3–5 above) runs **before and outside** the database transaction in step 7.
+### Test 1 — Time Zones: CONFIRMED
 
-- `ensureAvailableUsers()` queries busy times and evaluates conflicts at the application layer.
-- Only after this check passes does execution reach `tx.booking.create()`.
+**Source**: `apps/web/test/lib/getWorkingHours.test.ts` lines 10–75
 
----
+The `getWorkingHours()` function converts timezone-local working hour ranges into UTC minute offsets. The following test cases are verified in the test suite:
 
-## 3. Conflict Detection — Observed
+#### UTC+0 Baseline (GMT)
 
-**[OBSERVED]** `checkForConflicts()` compares the requested `[startTime, endTime]` window against the calculated set of busy intervals.
-
-- Works correctly under **sequential** request conditions.
-- If Request A has already committed its booking, a later Request B will see that booking in `_getBusyTimes()` and be correctly rejected.
-
----
-
-## 4. Race Condition — Inferred
-
-**[INFERRED]** The separation between the pre-booking availability check and the final database insertion creates a **Time-of-Check / Time-of-Use (TOCTOU) race condition** under concurrent requests.
-
-### Race Condition Scenario
-
-```
-Request A                        Request B                    Database
-─────────                        ─────────                    ────────
-1. checkForConflicts()
-   → slot is AVAILABLE
-                                 1. checkForConflicts()
-                                    → slot is AVAILABLE
-2. tx.booking.create()
-   → Booking A written                                        [Booking A committed]
-                                 2. tx.booking.create()
-                                    → Booking B written       [Booking B committed]
-                                                              ← DOUBLE BOOKING ✗
+```typescript
+// lines 10–25
+it("correctly translates Availability (UTC+0) to UTC workingHours", async () => {
+  expect(
+    getWorkingHours({ timeZone: "GMT" }, [
+      {
+        days: [0],
+        startTime: new Date(Date.UTC(2021, 11, 16, 23)),
+        endTime: new Date(Date.UTC(2021, 11, 16, 23, 59)),
+      },
+    ])
+  ).toStrictEqual([{ days: [0], endTime: 1439, startTime: 1380 }]);
+});
 ```
 
-Both requests passed the pre-booking availability check before either INSERT completed. Both bookings are now in the database for the same slot.
+#### Positive UTC Offset — Pacific/Auckland (UTC+12/+13)
 
-### Why the Transaction Alone Does Not Prevent This
+```typescript
+// lines 28–49
+it("correctly translates Availability in a positive UTC offset (Pacific/Auckland) to UTC workingHours", async () => {
+  expect(
+    getWorkingHours({ timeZone: "Pacific/Auckland" }, [
+      {
+        days: [1],
+        startTime: new Date(Date.UTC(2021, 11, 16, 0)),
+        endTime: new Date(Date.UTC(2021, 11, 16, 23, 59)),
+      },
+    ])
+  ).toStrictEqual([
+    { days: [1], endTime: 719, startTime: 0 },
+    { days: [0], endTime: 1439, startTime: 720 },
+  ]);
+});
+```
 
-The `prisma.$transaction(...)` call wraps **only the INSERT operation**, not the availability check. A standard `READ COMMITTED` transaction (the default isolation level) prevents dirty reads but does **not** prevent two concurrent transactions from each reading the same "free" state and both committing.
+#### Negative UTC Offset — Pacific/Midway (UTC-11)
 
-The transaction would need to either:
-- Re-verify availability **inside** the transaction boundary under a lock, or
-- Use `SERIALIZABLE` isolation and handle serialization failures, or
-- Rely on a **database-level exclusion constraint** on overlapping `[startTime, endTime)` ranges.
+```typescript
+// lines 52–75
+it("correctly translates Availability in a negative UTC offset (Pacific/Midway) to UTC workingHours", async () => {
+  expect(
+    getWorkingHours({ timeZone: "Pacific/Midway" }, [
+      {
+        days: [1],
+        startTime: new Date(Date.UTC(2021, 11, 16, 0)),
+        endTime: new Date(Date.UTC(2021, 11, 16, 23, 59)),
+      },
+    ])
+  ).toStrictEqual([
+    { days: [1], endTime: 1439, startTime: 660 },
+    { days: [2], endTime: 659, startTime: 0 },
+  ]);
+});
+```
 
-None of these mechanisms were observed in the reference implementation.
+**Additional fixture timezones verified**: `Asia/Kolkata` (IST +05:30), `America/Los_Angeles` (PST/PDT), `America/New_York` (EST/EDT), `Europe/Berlin` (CET/CEST), `Asia/Tokyo` (JST +09:00). DST boundary transitions are covered.
+
+**What is proven**: The UTC conversion algorithm handles positive offsets, negative offsets, half-hour offsets, and DST shifts correctly at the unit-test level.
+
+**What is NOT proven**: A live end-to-end booking across two different timezones was not performed.
 
 ---
 
-## 5. Additional Observations
+### Test 2 — Buffers: CONFIRMED
 
-### Idempotency Key [OBSERVED]
-- The `Booking` model includes an `idempotencyKey` field with a `@unique` constraint.
-- This prevents a **single client** from accidentally creating duplicates via retry.
-- It does **not** prevent **two distinct clients** from booking the same slot simultaneously with different keys.
+#### Predefined Buffer Values
 
-### No Database-Level Slot Overlap Constraint [OBSERVED]
-- The `Booking` table has no GiST range exclusion constraint such as:
-  ```sql
-  EXCLUDE USING gist (
-      "facultyId" WITH =,
-      tsrange("startTime", "endTime") WITH &&
-  )
-  ```
-- The database layer alone cannot reject overlapping concurrent inserts.
+**Source**: `packages/features/eventtypes/lib/getDefinedBufferTimes.ts` lines 1–3
 
-### Sequential Behaviour — Works Correctly [OBSERVED]
-- For requests arriving one at a time, the flow correctly rejects duplicates because `_getBusyTimes()` reads committed bookings before the conflict check.
+```typescript
+export const getDefinedBufferTimes = () => {
+  return [5, 10, 15, 20, 30, 45, 60, 90, 120];
+};
+```
+
+Maximum defined buffer = **120 minutes**.
+
+#### Buffer Expansion in Busy Time Calculation
+
+**Source**: `packages/features/busyTimes/services/getBusyTimes.ts` lines 109–181
+
+```typescript
+const definedBufferTimes = getDefinedBufferTimes();
+const maxBuffer = definedBufferTimes[definedBufferTimes.length - 1];
+const startTimeAdjustedWithMaxBuffer = dayjs(startTimeDate).subtract(maxBuffer, "minute").toDate();
+const endTimeAdjustedWithMaxBuffer = dayjs(endTimeDate).add(maxBuffer, "minute").toDate();
+
+// Buffer composition:
+const minutesToBlockBeforeEvent = (eventType?.beforeEventBuffer || 0) + (afterEventBuffer || 0);
+const minutesToBlockAfterEvent  = (eventType?.afterEventBuffer || 0) + (beforeEventBuffer || 0);
+
+// Expanded busy interval pushed into aggregate:
+aggregate.push({
+  start: dayjs(startTime).subtract(minutesToBlockBeforeEvent, "minute").toDate(),
+  end:   dayjs(endTime).add(minutesToBlockAfterEvent, "minute").toDate(),
+  title,
+  source: `eventType-${eventType?.id}-booking-${id}`,
+});
+```
+
+**What is proven**: Before-event and after-event buffers are composed symmetrically and the busy interval is expanded by the combined buffer values.
 
 ---
 
-## 6. Summary
+### Test 3 — Double Booking: CONFIRMED CONCURRENCY GAP
+
+#### Conflict Detection (In-Memory Check)
+
+**Source**: `packages/features/bookings/lib/conflictChecker/checkForConflicts.ts` lines 29–47
+
+```typescript
+const slotStart = time.valueOf();
+const slotEnd   = slotStart + eventLength * 60 * 1000;
+
+for (const busyTime of sortedBusyTimes) {
+  if (busyTime.start >= slotEnd) {
+    break;
+  }
+  if (busyTime.end <= slotStart) {
+    continue;
+  }
+  return true;  // conflict detected
+}
+```
+
+#### Rejection When No Available User
+
+**Source**: `packages/features/bookings/lib/handleNewBooking/ensureAvailableUsers.ts` lines 256–259
+
+```typescript
+if (availableUsers.length === 0) {
+  loggerWithEventDetails.error(`No available users found.`, piiFreeInputDataForLogging);
+  throw new Error(ErrorCode.NoAvailableUsersFound);
+}
+```
+
+#### Database Insert — Separate Non-Atomic Transaction
+
+**Source**: `packages/features/bookings/lib/handleNewBooking/createBooking.ts` lines 139–147
+
+```typescript
+return prisma.$transaction(async (tx) => {
+  if (originalBookingUpdateDataForCancellation) {
+    await tx.booking.update(originalBookingUpdateDataForCancellation);
+  }
+
+  const booking = await tx.booking.create(createBookingObj);
+
+  return { ...booking, userUuid: booking.user?.uuid ?? null };
+});
+```
+
+#### Absence of Slot-Level Database Constraint
+
+**Source**: `packages/prisma/schema.prisma` lines 851–870
+
+```prisma
+model Booking {
+  id             Int      @id @default(autoincrement())
+  uid            String   @unique
+  idempotencyKey String?  @unique
+  user           User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         Int?
+  startTime      DateTime
+  endTime        DateTime
+  // No @@unique([userId, startTime, endTime])
+  // No EXCLUDE USING gist range constraint
+}
+```
+
+**What is proven**:
+- Sequential conflicts: handled correctly. A committed booking is visible to `_getBusyTimes()`, and `checkForConflicts()` rejects the second request.
+- Concurrent conflicts: NOT protected. Two simultaneous requests can both pass `checkForConflicts()` before either commits, and both `tx.booking.create()` calls succeed.
+
+**What is NOT proven**: A live concurrent load test was not performed. This finding is established by static code tracing.
+
+---
+
+## 2. Booking Request Flow — Verified
+
+```
+POST /api/book/event                        apps/web/pages/api/book/event.ts
+        ↓
+RegularBookingService.createBooking()       lib/service/RegularBookingService.ts
+        ↓
+ensureAvailableUsers()                      lib/handleNewBooking/ensureAvailableUsers.ts
+        ↓
+getUserAvailability() / _getBusyTimes()     lib/handleNewBooking/ensureAvailableUsers.ts
+        ↓
+checkForConflicts()                         lib/conflictChecker/checkForConflicts.ts
+        ↓
+createBooking()                             lib/handleNewBooking/createBooking.ts
+        ↓
+saveBooking() → tx.booking.create()         lib/handleNewBooking/createBooking.ts:139-147
+```
+
+> **Critical observation**: The availability check (`ensureAvailableUsers`) runs entirely **before and outside** the `prisma.$transaction()` boundary. The transaction wraps only the INSERT.
+
+---
+
+## 3. SelectedSlots — Temporary Checkout Reservation
+
+**Source**: `packages/prisma/schema.prisma` lines 1437–1448
+
+```prisma
+model SelectedSlots {
+  id               Int      @id @default(autoincrement())
+  eventTypeId      Int
+  userId           Int
+  slotUtcStartDate DateTime
+  slotUtcEndDate   DateTime
+  uid              String
+  releaseAt        DateTime
+  isSeat           Boolean  @default(false)
+
+  @@unique(fields: [userId, slotUtcStartDate, slotUtcEndDate, uid], name: "selectedSlotUnique")
+}
+```
+
+**Observation**: `SelectedSlots` provides a short-lived checkout reservation mechanism with a unique constraint on `(userId, slotUtcStartDate, slotUtcEndDate, uid)`. This is a UI-level hold, not a booking-level concurrency guarantee.
+
+---
+
+## 4. Summary of Observed vs Proposed
 
 | Behaviour | Status |
 | :--- | :--- |
-| Sequential conflict detection | **Works correctly** |
-| Client-side retry deduplication (idempotency key) | **Works when key is provided** |
-| Concurrent double-booking prevention | **Not protected — race condition exists** |
+| Timezone-correct availability (unit-test verified) | **Confirmed working** |
+| Buffer expansion in busy time calculation | **Confirmed working** |
+| Sequential conflict detection | **Confirmed working** |
+| Client-side retry deduplication (idempotency key) | **Confirmed when key is provided** |
+| Concurrent double-booking prevention | **Not protected — confirmed gap** |
 | Database-level slot overlap constraint | **Not present** |
 | Natural-language booking | **Not present — proposed feature** |
 | Smart no-show reminder logic | **Not present — proposed feature** |
