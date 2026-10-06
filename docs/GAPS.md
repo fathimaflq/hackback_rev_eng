@@ -2,43 +2,62 @@
 
 **Date**: 2026-10-05
 
-This document identifies the gaps between the existing/observed booking flow and the requirements of the Smart Slot Booking system. For each gap, the current observed behaviour is described, followed by the proposed fix.
+This document identifies gaps between the existing/observed booking flow and the requirements of the Smart Slot Booking system.
 
 ---
 
-## Gap 1 — Concurrency Race Condition (Double Booking)
+## Gap 1 — Concurrency Race Condition (Double Booking) ★ Critical
 
 ### CURRENT / OBSERVED
 
-The standard booking flow separates the availability check from the database INSERT into two distinct, non-atomic steps:
+The standard booking flow separates availability checking from database insertion into two non-atomic steps:
 
 ```
-Step 1: ensureAvailableUsers() / checkForConflicts()
-        [reads busy times, detects conflicts]
+Step 1: ensureAvailableUsers() / checkForConflicts()   ← outside transaction
                     ↓
-Step 2: tx.booking.create()
-        [inserts the booking record]
+Step 2: tx.booking.create()                            ← inside transaction
 ```
 
-Under concurrent load, two requests for the same slot can interleave:
+**Race condition under concurrency**:
 
 ```
 Request A: checkForConflicts() → slot is free
-Request B: checkForConflicts() → slot is free
-Request A: tx.booking.create() → Booking A inserted
-Request B: tx.booking.create() → Booking B inserted  ← double booking
+Request B: checkForConflicts() → slot is free   (before A commits)
+Request A: tx.booking.create()                  → Booking A inserted
+Request B: tx.booking.create()                  → Booking B inserted  ← DOUBLE BOOKED
 ```
 
-**Why the transaction does not help**: The `prisma.$transaction(...)` wraps only the INSERT. It does not re-check availability inside the transaction. At the default `READ COMMITTED` isolation level, this provides no protection against the above interleaving.
+**Why the transaction alone does not prevent this**:
 
-**Database-level observation**: No GiST range exclusion constraint or equivalent exists on the `Booking` table to prevent overlapping `[startTime, endTime)` rows for the same faculty.
+The `prisma.$transaction(...)` in `createBooking.ts:139` wraps only the INSERT:
 
----
+```typescript
+// packages/features/bookings/lib/handleNewBooking/createBooking.ts:139-147
+return prisma.$transaction(async (tx) => {
+  const booking = await tx.booking.create(createBookingObj);
+  return { ...booking, userUuid: booking.user?.uuid ?? null };
+});
+```
+
+It does **not** re-check availability inside the transaction. At the default `READ COMMITTED` isolation level, this provides no protection against the race described above.
+
+**Database-level observation** (`packages/prisma/schema.prisma:851-870`):
+
+```prisma
+model Booking {
+  startTime DateTime
+  endTime   DateTime
+  // No @@unique([userId, startTime, endTime])
+  // No EXCLUDE USING gist range constraint
+}
+```
+
+No range exclusion constraint exists to reject concurrent overlapping inserts at the database level.
 
 ### PROPOSED FIX
 
-1. Move the availability re-check **inside** the atomic boundary (transaction or lock scope).
-2. Add a database-level exclusion constraint as a defense-in-depth fallback:
+1. Re-check availability **inside** the atomic transaction boundary.
+2. Add a database-level exclusion constraint as defense-in-depth:
    ```sql
    EXCLUDE USING gist (
        "facultyId" WITH =,
@@ -47,85 +66,166 @@ Request B: tx.booking.create() → Booking B inserted  ← double booking
    ```
 3. The losing concurrent request receives `409 Conflict`.
 
-**Requirement reference**: PRD §7 CON-1 through CON-5.
-
 ---
 
-## Gap 2 — Availability Check Is Separate From Insertion
+## Gap 2 — FIXME: Overlapping Boundary Bookings Omitted From Limit Checks
 
 ### CURRENT / OBSERVED
 
-`ensureAvailableUsers()` is called before `createBooking()`. There is no mechanism to ensure that the state of the database has not changed between the availability check completing and the INSERT executing.
+**Source**: `packages/features/busyTimes/services/getBusyTimes.ts` lines 466–479
+
+```typescript
+const where: Prisma.BookingWhereInput = {
+  userId: { in: userIds },
+  eventTypeId,
+  status: BookingStatus.ACCEPTED,
+  // FIXME: bookings that overlap on one side will never be counted
+  startTime: { gte: startTimeDate },
+  endTime:   { lte: endTimeDate },
+};
+```
+
+The query uses strict `gte`/`lte` bounds. A booking that overlaps the query window on one side (e.g., starts before `startTimeDate` but ends inside it) will not be included in the busy times result. This means the conflict checker may miss edge-case overlapping bookings.
 
 ### PROPOSED FIX
 
-Implement an **Atomic Booking Guard** that performs the availability re-validation and the INSERT as a single indivisible operation. See [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) §2.6 for options.
+The query should use an overlapping range condition:
+
+```typescript
+// Correct: include any booking that overlaps [startTimeDate, endTimeDate]
+startTime: { lt: endTimeDate },
+endTime:   { gt: startTimeDate },
+```
 
 ---
 
-## Gap 3 — Natural-Language Booking Does Not Exist
+## Gap 3 — 12-Hour Format String Bug in DST Offset Calculation
 
 ### CURRENT / OBSERVED
 
-The existing booking flow requires a student to navigate a slot picker manually. There is no mechanism to accept free-text booking requests.
+**Source**: `packages/features/schedules/lib/date-ranges.ts` lines 70–74
+
+```typescript
+const offsetBeginningOfDay = dayjs(start.format("YYYY-MM-DD hh:mm")).tz(adjustedTimezone).utcOffset();
+const offsetDiff = start.utcOffset() - offsetBeginningOfDay;
+
+start = start.add(offsetDiff, "minute");
+end   = end.add(offsetDiff, "minute");
+```
+
+`"hh:mm"` is a **12-hour** format code. The correct code for 24-hour time is `"HH:mm"`. For times in the afternoon (PM), this produces an incorrect offset baseline — the DST correction may be applied against an incorrect time representation.
 
 ### PROPOSED FIX
 
-Introduce a **Natural Language Parser** component that:
-1. Accepts free-text input.
-2. Extracts structured filters: `{ faculty, duration, date, timeRange }`.
-3. Passes those filters to the standard Availability Service.
-4. Returns available matching slots to the student for explicit selection.
+Replace `"hh:mm"` with `"HH:mm"` in the format string:
 
-**Key constraint**: The parser does **not** determine availability or confirm bookings autonomously. Availability remains deterministic.
-
-**Requirement reference**: PRD §7 NL-1 through NL-5.
+```typescript
+const offsetBeginningOfDay = dayjs(start.format("YYYY-MM-DD HH:mm")).tz(adjustedTimezone).utcOffset();
+```
 
 ---
 
-## Gap 4 — No Smart No-Show Reminder Logic
+## Gap 4 — Date Override +/- 1 Day Boundary Workaround (Known Technical Debt)
 
 ### CURRENT / OBSERVED
 
-No mechanism exists to track student no-shows and escalate reminder behaviour based on history.
+**Source**: `packages/features/schedules/lib/date-ranges.ts` lines 276–289
+
+```typescript
+const itemDateAsUtc = dayjs.utc(item.date);
+// TODO: Remove the .subtract(1, "day") and .add(1, "day") part and
+// refactor this to actually work with correct dates.
+// As of 2024-02-20, there are mismatches between local and UTC dates for overrides
+// and the dateFrom and dateTo fields, resulting in this if not returning true, which
+// results in "no available users found" errors.
+if (
+  itemDateAsUtc.isBetween(
+    dateFrom.subtract(1, "day").startOf("day"),
+    dateTo.add(1, "day").endOf("day"),
+    null,
+    "[]"
+  )
+)
+```
+
+A `TODO` comment explicitly acknowledges that the ±1 day buffer is a workaround for a date mismatch bug, not a correct fix.
 
 ### PROPOSED FIX
 
-Implement rule-based no-show logic:
-
-1. Track `NO_SHOW` outcomes in booking records.
-2. Before sending appointment reminders, check: `no_show_count >= 2`.
-3. If threshold is met: send earlier reminder, include "Release My Slot" option.
-4. This is **rule-based** — no machine learning or predictive model.
-
-**Requirement reference**: PRD §7 NS-1 through NS-5.
+Resolve the root cause (UTC vs local date mismatch in override records) and remove the artificial boundary expansion.
 
 ---
 
-## Gap 5 — No Release-Slot Functionality
+## Gap 5 — Public Unauthenticated Slot Reservation
 
 ### CURRENT / OBSERVED
 
-Cancellation flows exist in standard booking systems, but the specific "Release My Slot" workflow (triggered by a no-show reminder with a one-tap action) does not exist in the observed implementation.
+**Source**: `packages/trpc/server/routers/viewer/slots/_router.tsx` lines 26–33
+
+```typescript
+reserveSlot: publicProcedure.input(ZReserveSlotInputSchema).mutation(async ({ input, ctx }) => {
+  const { reserveSlotHandler } = await import("./reserveSlot.handler");
+  return reserveSlotHandler({
+    ctx: { ...ctx, req: ctx.req as NextApiRequest, res: ctx.res as NextApiResponse },
+    input,
+  });
+}),
+```
+
+`reserveSlot` is exposed as a `publicProcedure`, meaning it requires no authentication. Any unauthenticated caller can reserve slots in the `SelectedSlots` table.
 
 ### PROPOSED FIX
 
-Add `POST /api/bookings/:id/release`:
-- Updates booking status to `CANCELLED`.
-- Makes the slot immediately available for other students.
-
-This endpoint is surfaced in the no-show reminder as a direct action.
-
-**Requirement reference**: PRD §7 NS-3, NS-4. API §4.
+Evaluate whether reservation requires authentication. If the intent is to support anonymous checkout flows, add rate limiting and expiry enforcement. If not, protect this procedure behind authentication.
 
 ---
 
-## Gap Summary
+## Gap 6 — Unauthenticated Deletion of SelectedSlots via Spoofed UID
 
-| # | Gap | Current State | Proposed Fix |
+### CURRENT / OBSERVED
+
+**Source**: `packages/trpc/server/routers/viewer/slots/_router.tsx` lines 46–55
+
+```typescript
+removeSelectedSlotMark: publicProcedure
+  .input(ZRemoveSelectedSlotInputSchema)
+  .mutation(async ({ input, ctx }) => {
+    const { req, prisma } = ctx;
+    const uid = req?.cookies?.uid || input.uid;
+    if (uid) {
+      await prisma.selectedSlots.deleteMany({ where: { uid: { equals: uid } } });
+    }
+    return;
+  }),
+```
+
+`removeSelectedSlotMark` is also a `publicProcedure`. It accepts a `uid` from either a cookie or the request body and deletes all matching `SelectedSlots` records. An attacker who knows or guesses another user's `uid` can delete their slot reservation.
+
+### PROPOSED FIX
+
+At minimum, scope the deletion to the authenticated user's records. If the procedure must remain public, bind the `uid` to a server-set cookie only and do not accept it from the request body.
+
+---
+
+## Gap 7 — Missing Features (Not in Original Implementation)
+
+| Feature | Current State | Proposed Fix |
+| :--- | :--- | :--- |
+| Natural-language booking | Does not exist | NL Parser → structured filters → Availability Engine |
+| Smart no-show reminders | Does not exist | Rule-based: `count >= 2` → earlier reminder + release option |
+| Release-slot action | No dedicated endpoint | `POST /api/bookings/:id/release` |
+| Concurrent double-booking prevention | Race condition confirmed | Atomic Booking Guard (see Gap 1 fix) |
+
+---
+
+## Summary
+
+| # | Gap | Severity | Source Evidence |
 | :--- | :--- | :--- | :--- |
-| 1 | Concurrent double-booking | Race condition possible | Atomic booking guard + DB exclusion constraint |
-| 2 | Check/insert separation | Non-atomic | Re-check inside atomic boundary |
-| 3 | Natural-language booking | Does not exist | NL Parser → Availability Service |
-| 4 | Smart no-show reminders | Does not exist | Rule-based threshold logic |
-| 5 | Release-slot action | Does not exist | POST /api/bookings/:id/release |
+| 1 | Concurrency race condition — double booking | **Critical** | `createBooking.ts:139`, `schema.prisma:851` |
+| 2 | Overlapping boundary bookings missed in limit check | **High** | `getBusyTimes.ts:466-479` (FIXME comment) |
+| 3 | 12-hour format bug in DST offset calculation | **Medium** | `date-ranges.ts:70` (`hh:mm` vs `HH:mm`) |
+| 4 | Override date boundary workaround (known tech debt) | **Medium** | `date-ranges.ts:276-289` (TODO comment) |
+| 5 | Unauthenticated slot reservation | **Medium** | `slots/_router.tsx:26-33` |
+| 6 | Unauthenticated slot deletion via spoofed UID | **High** | `slots/_router.tsx:46-55` |
+| 7 | Missing features (NL booking, no-show, release) | **Feature Gap** | Proposed in PRD |
