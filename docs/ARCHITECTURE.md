@@ -1,224 +1,268 @@
 # Architecture — Smart Slot Booking
 
-**Status**: Proposed / Planning Phase  
+**Status:** Proposed / Planning Phase  
+**Date:** 2026-10-05
 
 ---
 
-## 1. High-Level Architecture Diagram
+## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                          Student                            │
-└──────────────────────────────┬──────────────────────────────┘
-                               │  HTTP Request
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         Frontend                            │
-│  - Standard slot picker UI                                  │
-│  - Natural-language input field                             │
-│  - Booking confirmation view                                │
-│  - Reminder notification with "Release My Slot" button      │
-└──────────────────────────────┬──────────────────────────────┘
-                               │  REST API calls
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         API Layer                           │
-│  GET  /api/slots                                            │
-│  POST /api/smart-booking        (NL parse → filters)        │
-│  POST /api/bookings             (concurrency-safe create)   │
-│  POST /api/bookings/:id/release (release / cancel)          │
-│  GET  /api/bookings/history     (for no-show count)         │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Booking Service                        │
-│                                                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  Availability Service                                 │  │
-│  │  - Reads faculty schedules                            │  │
-│  │  - Returns free slots for given filters               │  │
-│  │  - Source of truth for slot availability              │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  Natural Language Parser                              │  │
-│  │  - Accepts free-text from student                     │  │
-│  │  - Extracts: faculty, duration, date, time range      │  │
-│  │  - Returns structured filters ONLY                    │  │
-│  │  - Does NOT determine slot availability               │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  No-Show Reminder Logic                               │  │
-│  │  - Counts previous no-shows per student               │  │
-│  │  - If no_show_count >= 2: escalate reminder timing    │  │
-│  │  - Adds "Release My Slot" option to reminder          │  │
-│  │  - Rule-based only — no ML                            │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  Atomic Booking Guard   ← KEY COMPONENT               │  │
-│  │  - Wraps availability re-check + INSERT atomically    │  │
-│  │  - Prevents concurrent double-booking                 │  │
-│  │  - Options: DB exclusion constraint /                 │  │
-│  │    pessimistic lock / serializable transaction        │  │
-│  └───────────────────────────────────────────────────────┘  │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         Database                            │
-│  Tables: User, Faculty, Booking, FacultySchedule            │
-│  Constraint: No overlapping [startTime, endTime) per        │
-│              facultyId (enforced at DB or TX level)         │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    user["User"] --> app["Booking App"]
+    app --> availability["Check Availability"]
+    availability -.->|Suggested times| ai["AI Suggestions"]
+    ai -.-> availability
+    availability --> booking["Create Booking"]
+    booking --> database[("Database")]
+    database --> reminder["Send Reminder"]
+    reminder --> user
 ```
 
 ---
 
-## 2. Component Descriptions
+## Overview
 
-### 2.1 Frontend
-The student-facing UI provides:
-- A slot grid / calendar view for browsing faculty availability.
-- A natural-language input field for describing booking needs.
-- A booking confirmation screen.
-- Reminder notifications with, where applicable, a **Release My Slot** button.
+Smart Slot Booking is a scheduling system that allows users to check available slots, create bookings, receive intelligent slot suggestions, and receive reminders.
 
-> **Status**: Proposed. Not yet implemented.
+The system follows a simple core flow:
 
----
-
-### 2.2 API Layer
-A RESTful API layer routes incoming requests to the appropriate service handlers. All booking mutations go through the Booking Service.
-
-See [`docs/API.md`](./API.md) for detailed endpoint documentation.
-
-> **Status**: Proposed. Not yet implemented.
-
----
-
-### 2.3 Availability Service
-- Reads faculty working hours and existing confirmed bookings.
-- Computes free slots for a given set of filters (facultyId, date, duration).
-- Is the **single source of truth** for slot availability.
-- Used by both the standard booking flow and the natural-language booking flow.
-
-> **Status**: Proposed. Not yet implemented.
-
----
-
-### 2.4 Natural Language Parser
-
-**Role**: Converts a free-text student request into structured booking filters.
-
-**What it does**:
-- Receives raw text: `"I need 30 mins with Prof. Rao sometime Thursday afternoon"`
-- Extracts: `{ faculty: "Prof. Rao", duration: 30, day: "Thursday", timeRange: "afternoon" }`
-- Returns filters to the Availability Service.
-
-**What it does NOT do**:
-- It does **not** determine whether a slot is available.
-- It does **not** confirm a booking.
-- Availability is always determined by the Availability Service using the extracted filters.
-
-This design ensures that the AI component cannot bypass availability logic or create phantom bookings.
-
-> **Status**: Proposed. Not yet implemented.
-
----
-
-### 2.5 No-Show Reminder Logic
-
-**Role**: Applies rule-based escalation for students with a history of no-shows.
-
-**Rules**:
-1. Query booking history and count bookings where `status = NO_SHOW` for the student.
-2. If `no_show_count >= 2`:
-   - Send the appointment reminder **earlier** than the standard schedule.
-   - Include a **"Release My Slot"** option in the reminder.
-3. When a student releases their slot:
-   - Booking status is updated.
-   - Slot becomes available for other students.
-
-> This is **rule-based only**. There is no machine learning or predictive model involved.
-
-> **Status**: Proposed. Not yet implemented.
-
----
-
-### 2.6 Atomic Booking Guard
-
-**Role**: Ensures that booking creation is free from race conditions.
-
-**The problem it solves**: The standard pattern (check availability → insert booking as separate steps) allows two concurrent requests to both see the slot as free and both succeed.
-
-**Proposed approach** (mechanism to be finalised during implementation):
-
-| Option | Description |
-| :--- | :--- |
-| A — DB exclusion constraint | Add a GiST range exclusion on `(facultyId, [startTime, endTime))`. Concurrent inserts that overlap fail at the DB level. |
-| B — Pessimistic lock | `SELECT ... FOR UPDATE` on a slot lock row before inserting; other requests wait. |
-| C — Serializable transaction | Run the re-check + insert inside a `SERIALIZABLE` transaction; abort and retry on serialization failure. |
-
-The chosen mechanism will be documented during implementation.
-
-> **Status**: Proposed. Not yet implemented.
-
----
-
-### 2.7 Database
-
-**Technology**: PostgreSQL (via Prisma ORM, proposed).
-
-Key design requirements:
-- The `Booking` table must enforce that no two confirmed bookings for the same `facultyId` overlap in `[startTime, endTime)`.
-- The enforcement mechanism is to be chosen from the options in §2.6.
-
-See [`docs/DATA_MODEL.md`](./DATA_MODEL.md) for the full schema.
-
----
-
-## 3. Data Flow — Natural Language Booking
-
-```
-Student types: "30 mins with Prof. Rao Thursday afternoon"
-        ↓
-POST /api/smart-booking
-        ↓
-Natural Language Parser
-  → Extracts: { faculty: "Prof. Rao", duration: 30, day: "Thursday", timeRange: "afternoon" }
-        ↓
-Availability Service
-  → Returns: list of matching free slots
-        ↓
-Response to Frontend
-  → Student sees available slots and selects one
-        ↓
-POST /api/bookings  (standard concurrency-safe booking flow)
-        ↓
-Booking confirmed
+```text
+User
+  ↓
+Booking App
+  ↓
+Check Availability
+  ↓
+Create Booking
+  ↓
+Database
+  ↓
+Send Reminder
+  ↓
+User
 ```
 
+AI works as a supporting feature during the availability process and can suggest alternative suitable times.
+
 ---
 
-## 4. Data Flow — Concurrency-Safe Booking
+## Core Components
 
+| Component | Responsibility |
+|---|---|
+| **User** | Searches for available slots and creates bookings. |
+| **Booking App** | Provides the user interface for viewing and booking slots. |
+| **Check Availability** | Determines which slots are currently available. |
+| **AI Suggestions** | Suggests suitable alternative times based on available slot information. |
+| **Create Booking** | Handles the confirmation and creation of a booking. |
+| **Database** | Stores users, schedules, bookings, and related booking information. |
+| **Send Reminder** | Sends reminders to users about their bookings. |
+
+---
+
+## Main Booking Flow
+
+The standard booking process is:
+
+```text
+User
+  ↓
+Booking App
+  ↓
+Check Availability
+  ↓
+Create Booking
+  ↓
+Database
 ```
-POST /api/bookings
+
+The availability component determines whether a requested slot can be booked before the booking is created.
+
+---
+
+## Timezone Handling
+
+The system must support users and hosts operating in different timezones.
+
+For example:
+
+```text
+Host Timezone
+Asia/Kolkata (IST)
+
         ↓
-Booking Service
-  → Validate request
-  → Compute slot window (apply any buffers)
+
+Availability / Booking Logic
+
         ↓
-Atomic Booking Guard
-  → [Inside atomic boundary]
-  → Re-query availability
-  → If slot free: INSERT booking
-  → If slot taken: return 409 Conflict
-        ↓
-Database: booking committed or conflict raised
-        ↓
-Response to client: 201 Created / 409 Conflict
+
+Booker Timezone
+America/Los_Angeles
 ```
+
+Booking times should be normalized consistently when performing availability and conflict checks.
+
+The same real-world booking should be displayed in the correct local time for both the host and the booker.
+
+---
+
+## Buffer Time
+
+The availability system must respect the configured buffer between bookings.
+
+For example:
+
+```text
+Booking
+10:00 ───────── 10:30
+
+Buffer
+                 10:30 ───── 10:45
+
+Next Available Slot
+                              10:45 ─────
+```
+
+A slot that overlaps the required buffer must not be offered as available.
+
+---
+
+## Concurrent Booking Protection
+
+The booking service must prevent two users from successfully booking the same slot at the same time.
+
+The expected behaviour is:
+
+```text
+Student A ──────→ Create Booking ──────→ 201 Created
+                         │
+                         │
+Student B ──────→ Same Slot ──────────→ 409 Conflict
+```
+
+The database must contain only **one confirmed booking** for the same slot.
+
+Concurrency protection must be handled by the backend/database rather than only by the frontend.
+
+---
+
+## AI Assistance
+
+AI provides supporting functionality without controlling the booking process.
+
+The AI flow is:
+
+```text
+Check Availability
+        ↓
+AI Suggestions
+        ↓
+Suggested Times
+        ↓
+User
+```
+
+AI suggestions are based on available slot information.
+
+The AI layer must not independently confirm or create bookings.
+
+Any selected suggestion must go through the normal availability and booking flow.
+
+---
+
+## Reminder Flow
+
+Booking information stored in the database can be used to provide reminders.
+
+```text
+Database
+    ↓
+Send Reminder
+    ↓
+User
+```
+
+Reminders help users stay aware of their upcoming bookings.
+
+---
+
+## Key Architectural Principles
+
+### 1. Availability First
+
+The system checks availability before allowing a booking to be created.
+
+### 2. Safe Booking
+
+The booking process must protect against concurrent booking attempts for the same slot.
+
+### 3. Timezone Awareness
+
+Availability and booking calculations must correctly handle different user and host timezones.
+
+### 4. Buffer Enforcement
+
+Required buffer time between bookings must be respected by the booking logic.
+
+### 5. AI as an Assistant
+
+AI provides suggestions but does not control availability or directly create bookings.
+
+### 6. Centralized Data
+
+Booking and scheduling information is stored in the database.
+
+---
+
+## Architecture Summary
+
+```text
+                    ┌─────────────────┐
+                    │      User       │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │  Booking App    │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │ Check Availability│
+                    └───────┬─────────┘
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           ▼
+      ┌───────────────┐           ┌────────────────┐
+      │ AI Suggestions│           │ Create Booking │
+      └───────┬───────┘           └───────┬────────┘
+              │                           │
+              └───────────┐       ┌───────┘
+                          │       │
+                          ▼       ▼
+                       ┌────────────┐
+                       │  Database  │
+                       └──────┬─────┘
+                              │
+                              ▼
+                       ┌────────────┐
+                       │  Reminder  │
+                       └──────┬─────┘
+                              │
+                              ▼
+                            User
+```
+
+---
+
+## Killer Test Coverage
+
+The architecture directly supports the three required Killer Tests:
+
+| Killer Test | Architecture Component |
+|---|---|
+| **Timezone correctness** | Availability & Booking Logic |
+| **Buffer enforcement** | Availability Engine |
+| **Concurrent booking safety** | Booking Service + Database |
